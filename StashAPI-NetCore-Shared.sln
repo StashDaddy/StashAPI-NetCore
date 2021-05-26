@@ -1,0 +1,18 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 16
+VisualStudioVersion = 16.0.31313.79
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{D954291E-2A0B-460D-934E-DC6B0785DB48}") = "STASHAPI", "STASHAPI\STASHAPI.shproj", "{72CC2B19-CABD-4C8B-9FA4-AEC8B3C7854C}"
+EndProject
+Global
+	GlobalSection(SharedMSBuildProjectFiles) = preSolution
+		STASHAPI\STASHAPI.projitems*{72cc2b19-cabd-4c8b-9fa4-aec8b3c7854c}*SharedItemsImports = 13
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {63B55624-8895-4502-A319-18BDA6A06AE8}
+	EndGlobalSection
+EndGlobal
