@@ -18,7 +18,6 @@ using System.Security.Cryptography;     // Reference: System
 using System.Net;                       // Reference: System
 using System.Web;                       // Reference: System.Web 
 using System.Collections.Generic;       // Reference: System
-//using System.Web.Script.Serialization;  // Reference: System.Web.Extensions
 using System.Globalization;             // Reference: System
 using System.Threading.Tasks;           // Reference: System
 using System.IO;                        // Reference: System
@@ -179,9 +178,6 @@ namespace Stash
             if (!dataIn.TryGetValue("api_timestamp", out object apiTimestamp) || apiTimestamp == null || apiTimestamp.ToString() == "") { throw new System.Exception("Input array missing api_timestamp for signature calculation"); }
             if (dataIn.ContainsKey("api_signature")) { dataIn.Remove("api_signature"); }
 
-            // Replace this with json_encoded string of dataIn, unescpated slashes
-            //strToSign = Http_build_query(dataIn);
-            //JsonSerializer serializer = new JsonSerializer();
             strToSign = JsonSerializer.Serialize(dataIn);
 
             sig = Hash_hmac("sha256", strToSign, this.api_pw);
@@ -584,8 +580,6 @@ namespace Stash
             apiParams.Add("api_signature", this.getSignature());
 
             // Build payload
-            //JavaScriptSerializer objSerializer = new JavaScriptSerializer();
-
             payload = JsonSerializer.Serialize(apiParams);       // apiParams is already merged if need be in signature above
             byte[] payloadBytes = Encoding.UTF8.GetBytes(payload);
 
@@ -641,7 +635,6 @@ namespace Stash
                 apiParams.Add("api_signature", this.getSignature());
 
                 // Build payload
-                //JavaScriptSerializer objSerializer = new JavaScriptSerializer();
                 payload = JsonSerializer.Serialize(apiParams);       // apiParams is already merged if need be in signature above
                 byte[] payloadBytes = Encoding.UTF8.GetBytes(payload);
 
@@ -669,16 +662,12 @@ namespace Stash
                     if (idx >= 1)
                     {
                         tStr = tStr.Substring(0, idx);
-
-                        object objCheckDict = JsonSerializer.Deserialize(tStr, typeof(object));
-                        Dictionary<string, object> errCheckDict = (Dictionary<string, object>)objCheckDict;
-                        if (errCheckDict.TryGetValue("code", out object codeVal))
-                        {
-                            if (codeVal != null && (codeVal.ToString() == "400" || codeVal.ToString() == "403" || codeVal.ToString() == "500"))
-                            {
-                                return tStr;
-                            }
+                        apiError apiErr = JsonSerializer.Deserialize<apiError>(tStr);
+                        if (apiErr.code >= 400 && apiErr.code <= 500)
+                        {   // The value returned was an API error JSON string, not the file content, return the error JSON
+                            return tStr;
                         }
+
                     }
                 }
                 catch (Exception ex)
@@ -761,8 +750,6 @@ namespace Stash
                     {
                         strVals = strVals + String.Format("\"{0}\",", strItem);
                     }
-                    // Strip out last comma
-                    //strVals = Strings.Left(strVals, Len(strVals) - 1);
                     strVals = strVals.Substring(0, strVals.Length - 1);     // Strip off final comma
                     strVals = strVals + "],";
                 }
@@ -890,7 +877,6 @@ namespace Stash
                 string strVals = "";
                 foreach (KeyValuePair<string, object> kvp in apiParams)
                 {
-                    //if (IsArray(kvp.Value))
                     if (kvp.Value.GetType() == typeof(string[]))
                     {
                         strVals = strVals + String.Format("\"{0}\":[", kvp.Key.ToString());
@@ -898,8 +884,6 @@ namespace Stash
                         {
                             strVals = strVals + String.Format("\"{0}\",", strItem);
                         }
-                        // Strip out last comma
-                        //strVals = Strings.Left(strVals, Len(strVals) - 1);
                         strVals = strVals.Substring(0, strVals.Length - 1);     // Strip off final comma
                         strVals = strVals + "],";
                     }
@@ -914,7 +898,6 @@ namespace Stash
                     strVals = strVals.Substring(0, strVals.Length - 1);     // Strip off final comma
                 }
                 // ToDo Replace with callback (see Issue #9, STASHAPI-NET-Dev)
-                //objStash.CurrentEventPath = fileNameIn;
                 var stopWatch = System.Diagnostics.Stopwatch.StartNew();
 
                 //Begin reading the file and send each chunk to the server.
@@ -1065,9 +1048,6 @@ namespace Stash
         // 
         public bool validateDestParams(bool folderOnly, bool nameOnly)
         {
-            //object tDestFolderId = 0;
-            //object[] tDestFolderNames = new string[0];
-            //object tDestFileName = "";
             if (folderOnly && nameOnly)
             {
                 throw new ArgumentException("folderOnly and nameOnly cannot both be TRUE");
@@ -1097,11 +1077,9 @@ namespace Stash
                 }
                 throw new ArgumentException("Destination Parameters Invalid - destFileName plus either destFolderId or destFolderNames MUST be specified");
             }
-            //return false;
         }
 
         // Function validates the output type parameters
-        //
         // Source identifier must contain outputType equal to one of the APIRequest::API_OUTPUT_TYPE_X constants
         public bool validateOutputParams()
         {
@@ -1555,12 +1533,15 @@ namespace Stash
                             s = s + "Object: " + objArray[i].ToString();
                         }
                     }
+                    else if (kvp.Value.GetType() == typeof(System.Text.Json.JsonElement))
+                    {
+                        s = s + String.Format("{0}", ((JsonElement)kvp.Value).ToString()) + ",";
+                    }
                     else
                     {
                         s = s + "Unknown data type in dictionary, Type: " + kvp.Value.GetType().ToString() + ",";
                     }
                 }
-                // Strip off last comma
                 if (s.Substring(s.Length - 1, 1) == ",")
                 {
                     s = s.Substring(0, s.Length - 1);               // Strip off trailing comma
@@ -1575,53 +1556,53 @@ namespace Stash
         }
 
         // Loose implementation of PHP's http_build_query function which URL encodes certain values in a string
-        //
-        public string Http_build_query(Dictionary<string, object> dataIn)
-        {
-            string tStr = "";
-            foreach (KeyValuePair<string, object> kvp in dataIn)
-            {
-                if (kvp.Value.GetType().Equals(typeof(string)) || IsNumeric(kvp.Value))
-                {
-                    tStr = String.Concat(tStr, (tStr == "" ? "" : "&"), kvp.Key, "=", HttpUtility.UrlEncode(kvp.Value.ToString()));
-                }
-                else
-                {
-                    if (kvp.Value.GetType().Equals(typeof(string[])))
-                    {
-                        int counter = 0;
-                        foreach (string strItem in (string[])kvp.Value)
-                        {
-                            tStr = String.Concat(tStr, (tStr == "" ? "" : "&"), HttpUtility.UrlEncode(String.Format("{0}[{1}]", kvp.Key, counter.ToString())), "=", HttpUtility.UrlEncode(strItem));
-                            counter++;
-                        }
-                    }
-                    else if (kvp.Value.GetType().Equals(typeof(System.Guid)))
-                    {
-                        tStr = String.Concat(tStr, (tStr == "" ? "" : "&"), kvp.Key, "=", HttpUtility.UrlEncode(kvp.Value.ToString()));
-                    }
-                    else if (kvp.Value.GetType().Equals(typeof(Boolean)))
-                    {
-                        tStr = String.Concat(tStr, (tStr == "" ? "" : "&"), kvp.Key, "=", HttpUtility.UrlEncode((kvp.Value.Equals(true) ? "1" : "0")));
-                    }
-                    else
-                    {
-                        throw new Exception("Dictionary Value Conversion Not Implemented in Http_build_query(), Type: " + kvp.Value.GetType().ToString());
-                    }
-                }
-            }
-            // Manual character replacement, $-_.+!*'(),  need to be replaced, see RFC 1738 - http://www.ietf.org/rfc/rfc1738.txt
-            tStr = tStr.Replace("(", "%28");
-            tStr = tStr.Replace(")", "%29");
-            tStr = tStr.Replace("*", "%2A");
-            tStr = tStr.Replace("!", "%21");
+        // @deprecated - use JsonSerializer.Serialize()
+        //public string Http_build_query(Dictionary<string, object> dataIn)
+        //{
+        //    string tStr = "";
+        //    foreach (KeyValuePair<string, object> kvp in dataIn)
+        //    {
+        //        if (kvp.Value.GetType().Equals(typeof(string)) || IsNumeric(kvp.Value))
+        //        {
+        //            tStr = String.Concat(tStr, (tStr == "" ? "" : "&"), kvp.Key, "=", HttpUtility.UrlEncode(kvp.Value.ToString()));
+        //        }
+        //        else
+        //        {
+        //            if (kvp.Value.GetType().Equals(typeof(string[])))
+        //            {
+        //                int counter = 0;
+        //                foreach (string strItem in (string[])kvp.Value)
+        //                {
+        //                    tStr = String.Concat(tStr, (tStr == "" ? "" : "&"), HttpUtility.UrlEncode(String.Format("{0}[{1}]", kvp.Key, counter.ToString())), "=", HttpUtility.UrlEncode(strItem));
+        //                    counter++;
+        //                }
+        //            }
+        //            else if (kvp.Value.GetType().Equals(typeof(System.Guid)))
+        //            {
+        //                tStr = String.Concat(tStr, (tStr == "" ? "" : "&"), kvp.Key, "=", HttpUtility.UrlEncode(kvp.Value.ToString()));
+        //            }
+        //            else if (kvp.Value.GetType().Equals(typeof(Boolean)))
+        //            {
+        //                tStr = String.Concat(tStr, (tStr == "" ? "" : "&"), kvp.Key, "=", HttpUtility.UrlEncode((kvp.Value.Equals(true) ? "1" : "0")));
+        //            }
+        //            else
+        //            {
+        //                throw new Exception("Dictionary Value Conversion Not Implemented in Http_build_query(), Type: " + kvp.Value.GetType().ToString());
+        //            }
+        //        }
+        //    }
+        //    // Manual character replacement, $-_.+!*'(),  need to be replaced, see RFC 1738 - http://www.ietf.org/rfc/rfc1738.txt
+        //    tStr = tStr.Replace("(", "%28");
+        //    tStr = tStr.Replace(")", "%29");
+        //    tStr = tStr.Replace("*", "%2A");
+        //    tStr = tStr.Replace("!", "%21");
 
-            // Change all %2x and %3x and similar codes to uppercase, to match PHP's http_build_query function
-            Regex reg = new Regex("%[a-f0-9]{2}");
-            tStr = reg.Replace(tStr, new MatchEvaluator(regexToUpper));
+        //    // Change all %2x and %3x and similar codes to uppercase, to match PHP's http_build_query function
+        //    Regex reg = new Regex("%[a-f0-9]{2}");
+        //    tStr = reg.Replace(tStr, new MatchEvaluator(regexToUpper));
 
-            return tStr;
-        }
+        //    return tStr;
+        //}
 
         // Converts strings to uppercase, used by Regex handling
         public string regexToUpper(Match m)
@@ -1720,7 +1701,6 @@ namespace Stash
                 byte b = (byte)ch;
                 int h = Convert.ToInt32(b.ToString(), 16);
                 hexStr.Append(h.ToString().PadLeft(2, '0'));
-                //hexStr.Append(Hex(Asc(ch)).PadLeft(2, "0"));
             }
             Regex reg = new Regex("[A-F]");
             retVal = reg.Replace(hexStr.ToString(), new MatchEvaluator(regexToLower));      // For compat with PHP's bin2hex which outputs lowercase hexbits
@@ -1761,7 +1741,7 @@ namespace Stash
         // STASH API HELPER FUNCTIONS
         // *********************************************************************************************
         // Downloads a file from the user's vault
-        public Dictionary<string, object> getFile(Dictionary<string, object> srcIdentifier, string fileNameOut, out int retCode)
+        public string getFile(Dictionary<string, object> srcIdentifier, string fileNameOut, out int retCode)
         {
             string apiResult = "";
             retCode = 0;
@@ -1783,30 +1763,15 @@ namespace Stash
             if (this.dParams != null) { this.dParams.Clear(); }
 
             if (apiResult == "1")
-            {         // Simulate a 200 OK if command succeeds
+            {   // Simulate a 200 OK if command succeeds
                 retCode = 200;
                 retVal.Add("code", "200");
                 retVal.Add("message", "OK");
                 retVal.Add("fileName", fileNameOut);
-            }
-            else
-            {
-                // Something else went wrong with the request
-                // Try to deserialize the response
-                try
-                {
-                    //JavaScriptSerializer objSerializer = new JavaScriptSerializer();
-                    object objCheckDict = JsonSerializer.Deserialize(apiResult, typeof(object));
-                    return (Dictionary<string, object>)objCheckDict;
-                }
-                catch (Exception ex)
-                {
-                    retCode = -1;
-                    retVal.Add("code", -1);
-                    retVal.Add("message", "Unable to Download File - " + ex.Message + " - " + apiResult);
-                }
-            }
-            return retVal;
+                apiResult = JsonSerializer.Serialize(retVal);
+            } 
+
+            return apiResult;
         }
 
         // Uploads file to the user's Vault
@@ -1921,12 +1886,9 @@ namespace Stash
                 throw new Exception("Incorrect Input File Path or File Does Not Exist");
             }
 
-            //this.dParams = srcIdentifier;
             this.url = this.BASE_API_URL + "api2/support/writesupport";
-            //if (!this.validateParams("write")) { throw new ArgumentException("Invalid Input Parameters"); }
 
             apiResult = this.SendFileRequest(fileNameIn);
-            //if (this.dParams != null) { this.dParams.Clear(); }
 
             retCode = GetResponseCodeDict(apiResult, out retVal);
 
@@ -2061,12 +2023,7 @@ namespace Stash
 
             if (retCode == 200)
             {
-                object fileIdObj;
-                retVal.TryGetValue("fileAliasId", out fileIdObj);
-                if (fileIdObj != null)
-                {
-                    fileAliasId = Convert.ToUInt64(fileIdObj.ToString());
-                }
+                fileAliasId = (retVal.TryGetValue("fileAliasId", out object objFileAliasId) ? Convert.ToUInt64(objFileAliasId.ToString()) : 0);
             }
             else
             {
@@ -2081,11 +2038,11 @@ namespace Stash
         }
 
         // Function renames a file in the Vault
-        public Dictionary<string, object> renameFile(Dictionary<string, object> srcIdentifier, Dictionary<string, object> dstIdentifier, out int retCode, out UInt64 fileId)
+        public Dictionary<string, object> renameFile(Dictionary<string, object> srcIdentifier, Dictionary<string, object> dstIdentifier, out int retCode, out UInt64 fileAliasId)
         {
             string apiResult = "";
             retCode = 0;
-            fileId = 0;
+            fileAliasId = 0;
             Dictionary<string, object> retVal = null;
 
             this.dParams = Dictionaries_merge(srcIdentifier, dstIdentifier);
@@ -2100,12 +2057,7 @@ namespace Stash
 
             if (retCode == 200)
             {
-                object fileIdObj;
-                retVal.TryGetValue("fileId", out fileIdObj);
-                if (fileIdObj != null)
-                {
-                    fileId = Convert.ToUInt64(fileIdObj.ToString());
-                }
+                fileAliasId = (retVal.TryGetValue("fileAliasId", out object objFileAliasId) ? Convert.ToUInt64(objFileAliasId.ToString()) : 0);
             }
             else
             {
@@ -2138,12 +2090,7 @@ namespace Stash
 
             if (retCode == 200)
             {
-                object fileIdObj;
-                retVal.TryGetValue("fileAliasId", out fileIdObj);
-                if (fileIdObj != null)
-                {
-                    fileAliasId = Convert.ToUInt64(fileIdObj.ToString());
-                }
+                fileAliasId = (retVal.TryGetValue("fileAliasId", out object objFileAliasId) ? Convert.ToUInt64(objFileAliasId.ToString()) : 0);
             }
             else
             {
@@ -2173,17 +2120,10 @@ namespace Stash
 
             retCode = GetResponseCodeDict(apiResult, out retVal);
 
-            if (retCode == 200)
-            {
-                // No data to return
-            }
-            else
+            if (retCode != 200 && this.verbosity)
             {
                 GetError(retVal, out retCode, out string msg, out string extMsg);
-                if (this.verbosity)
-                {
-                    Console.WriteLine("- Error Occurred deleteFile, Code: " + retCode.ToString() + " Message: " + (msg != null ? msg.ToString() : "Not Available") + " Extended Message: " + (extMsg != null ? extMsg.ToString() : "Not Available"));
-                }
+                Console.WriteLine("- Error Occurred deleteFile, Code: " + retCode.ToString() + " Message: " + (msg != null ? msg.ToString() : "Not Available") + " Extended Message: " + (extMsg != null ? extMsg.ToString() : "Not Available"));
             }
             return retVal;
         }
@@ -2215,94 +2155,36 @@ namespace Stash
         }
 
         // Lists the files in the user's Vault, or in a specified folder in the vault
-        public Dictionary<string, object> listFiles(Dictionary<string, object> srcIdentifier, out int retCode, out string[] fileNames)
+        public string listFiles(Dictionary<string, object> srcIdentifier, out int retCode)
         {
             string apiResult = "";
             retCode = 0;
-            fileNames = null;
             Dictionary<string, object> retVal = null;
-            bool modelOutput = false;
 
             this.dParams = srcIdentifier;
             this.url = this.BASE_API_URL + "api2/file/listfiles";
 
             if (!this.validateParams("listfiles")) { throw new ArgumentException("Invalid Input Parameters"); }
 
-            if (this.dParams.TryGetValue("outputType", out object objOutputType) && objOutputType != null)
-            {
-                if (Convert.ToInt16(objOutputType) >= 4 && Convert.ToInt16(objOutputType) <= 6)
-                {
-                    modelOutput = true;
-                }
-            }
             apiResult = this.SendRequest();
             if (this.dParams != null) { this.dParams.Clear(); }
 
             retCode = GetResponseCodeDict(apiResult, out retVal);
 
-            if (retCode == 200)
+            if (retCode != 200 && this.verbosity)
             {
-                object objFiles;
-                retVal.TryGetValue("files", out objFiles);
-                if (objFiles != null)
-                {
-                    if (modelOutput)
-                    {
-                        Array tArray = (Array)objFiles;
-                        fileNames = new string[tArray.Length];
-                        for (int i = 0; i < tArray.Length; i++)
-                        {
-                            try
-                            {
-                                Dictionary<string, object> tDict = (Dictionary<string, object>)tArray.GetValue(i);
-                                object objFileName;
-                                if (tDict.TryGetValue("name", out objFileName) && objFileName != null && objFileName.ToString() != "")   // OutputType 4,5
-                                {
-                                    fileNames[i] = objFileName.ToString();
-                                }
-                                else if (tDict.TryGetValue("text", out objFileName) && objFileName != null && objFileName.ToString() != "")  // OutputType 6
-                                {
-                                    fileNames[i] = objFileName.ToString();
-                                }
-                                else
-                                {
-                                    fileNames[i] = "";
-                                }
-                            }
-#pragma warning disable 168
-                            catch (Exception ex)
-#pragma warning restore
-                            {
-                                fileNames[i] = "";
-                            }
-                        }
-                    }
-                    else
-                    {
-                        Array tArray = (Array)objFiles;
-                        fileNames = new string[tArray.Length];
-                        for (int i = 0; i < Convert.ToInt32(tArray.Length.ToString()); i++)
-                        {
-                            fileNames[i] = tArray.GetValue(i).ToString();
-                        }
-                    }
-                }
-            }
-            else if (this.verbosity)
-            {
-                GetError(retVal, out int code, out string msg, out string extMsg);
+                GetError(apiResult, out int code, out string msg, out string extMsg);
                 Console.WriteLine("- Error Occurred listFiles, Code: " + retCode.ToString() + " Message: " + (msg != null ? msg.ToString() : "Not Available") + " Extended Message: " + (extMsg != null ? extMsg.ToString() : "Not Available"));
             }
 
-            return retVal;
+            return apiResult;
         }
 
         // Lists the files in the specified SmartFolder
-        public Dictionary<string, object> listSFFiles(Dictionary<string, object> srcIdentifier, out int retCode, out string[] fileNames)
+        public string listSFFiles(Dictionary<string, object> srcIdentifier, out int retCode)
         {
             string apiResult = "";
             retCode = 0;
-            fileNames = null;
             Dictionary<string, object> retVal = null;
 
             this.dParams = srcIdentifier;
@@ -2315,48 +2197,25 @@ namespace Stash
 
             retCode = GetResponseCodeDict(apiResult, out retVal);
 
-            if (retCode == 200)
+            if (retCode != 200 && this.verbosity)
             {
-                object objFiles;
-                retVal.TryGetValue("files", out objFiles);
-                if (objFiles != null)
-                {
-                    Array tArray = (Array)objFiles;
-                    fileNames = new string[tArray.Length];
-                    for (int i = 0; i < Convert.ToInt32(tArray.Length.ToString()); i++)
-                    {
-                        fileNames[i] = tArray.GetValue(i).ToString();
-                    }
-                }
-            }
-            else if (this.verbosity)
-            {
-                GetError(retVal, out int code, out string msg, out string extMsg);
-                Console.WriteLine("- Error Occurred listSFFiles, Code: " + retCode.ToString() + " Message: " + (msg != null ? msg.ToString() : "Not Available") + " Extended Message: " + (extMsg != null ? extMsg.ToString() : "Not Available"));
+                GetError(apiResult, out int code, out string msg, out string extMsg);
+                Console.WriteLine("- Error Occurred listFiles, Code: " + retCode.ToString() + " Message: " + (msg != null ? msg.ToString() : "Not Available") + " Extended Message: " + (extMsg != null ? extMsg.ToString() : "Not Available"));
             }
 
-            return retVal;
+            return apiResult;
         }
 
         // Lists the Folders in the user's Vault
-        public Dictionary<string, object> listFolders(Dictionary<string, object> srcIdentifier, out int retCode, out string[] folderNames)
+        public string listFolders(Dictionary<string, object> srcIdentifier, out int retCode)
         {
             string apiResult = "";
             retCode = 0;
-            folderNames = null;
             Dictionary<string, object> retVal = null;
-            bool modelOutput = false;
 
             this.dParams = srcIdentifier;
             this.url = this.BASE_API_URL + "api2/file/listfolders";
 
-            if (this.dParams.TryGetValue("outputType", out object objOutputType) && objOutputType != null)
-            {
-                if (Convert.ToInt16(objOutputType) >= 4 && Convert.ToInt16(objOutputType) <= 6)
-                {
-                    modelOutput = true;
-                }
-            }
             if (!this.validateParams("listfolders")) { throw new ArgumentException("Invalid Input Parameters"); }
 
             apiResult = this.SendRequest();
@@ -2364,56 +2223,13 @@ namespace Stash
 
             retCode = GetResponseCodeDict(apiResult, out retVal);
 
-            if (retCode == 200)
+            if (retCode != 200 && this.verbosity)
             {
-                object objFolders;
-                retVal.TryGetValue("folders", out objFolders);
-                if (objFolders != null)
-                {
-                    if (modelOutput)
-                    {
-                        Array tArray = (Array)objFolders;
-                        folderNames = new string[tArray.Length];
-                        for (int i = 0; i < tArray.Length; i++)
-                        {
-                            try
-                            {
-                                Dictionary<string, object> tDict = (Dictionary<string, object>)tArray.GetValue(i);
-                                if (tDict.TryGetValue("text", out object objFolderName) && objFolderName != null && objFolderName.ToString() != "")
-                                {
-                                    folderNames[i] = objFolderName.ToString();
-                                }
-                                else
-                                {
-                                    folderNames[i] = "";
-                                }
-                            }
-#pragma warning disable 168
-                            catch (Exception ex)
-#pragma warning restore
-                            {
-                                folderNames[i] = "";
-                            }
-                        }
-                    }
-                    else
-                    {
-                        Array tArray = (Array)objFolders;
-                        folderNames = new string[tArray.Length];
-                        for (int i = 0; i < Convert.ToInt32(tArray.Length.ToString()); i++)
-                        {
-                            folderNames[i] = tArray.GetValue(i).ToString();
-                        }
-                    }
-                }
-            }
-            else if (this.verbosity)
-            {
-                GetError(retVal, out int code, out string msg, out string extMsg);
+                GetError(apiResult, out int code, out string msg, out string extMsg);
                 Console.WriteLine("- Error Occurred listFolders, Code: " + retCode.ToString() + " Message: " + (msg != null ? msg.ToString() : "Not Available") + " Extended Message: " + (extMsg != null ? extMsg.ToString() : "Not Available"));
             }
 
-            return retVal;
+            return apiResult;
         }
 
         // Gets the internal ID for a folder in the user's Vault
@@ -2433,12 +2249,7 @@ namespace Stash
 
             if (retCode == 200)
             {
-                object folderId;
-                retVal.TryGetValue("folderId", out folderId);
-                if (folderId != null)
-                {
-                    dirId = Convert.ToUInt64(folderId.ToString());
-                }
+                dirId = (retVal.TryGetValue("folderId", out object objFolderId) ? Convert.ToUInt64(objFolderId.ToString()) : 0);
             }
             else if (this.verbosity)
             {
@@ -2469,18 +2280,13 @@ namespace Stash
 
             if (retCode == 200)
             {
-                object fileIdObj;
-                retVal.TryGetValue("fileAliasId", out fileIdObj);
-                if (fileIdObj != null)
-                {
-                    fileAliasId = Convert.ToUInt64(fileIdObj.ToString());
-                }
+                fileAliasId = (retVal.TryGetValue("fileAliasId", out object objFileAliasId) ? Convert.ToUInt64(objFileAliasId.ToString()) : 0);
             }
             else
             {
-                GetError(retVal, out retCode, out string msg, out string extMsg);
                 if (this.verbosity)
                 {
+                    GetError(retVal, out retCode, out string msg, out string extMsg);
                     Console.WriteLine("- Error Occurred setFileLock, Code: " + retCode.ToString() + " Message: " + (msg != null ? msg.ToString() : "Not Available") + " Extended Message: " + (extMsg != null ? extMsg.ToString() : "Not Available"));
                 }
             }
@@ -2507,18 +2313,13 @@ namespace Stash
 
             if (retCode == 200)
             {
-                object fileLockObj;
-                retVal.TryGetValue("fileLock", out fileLockObj);
-                if (fileLockObj != null)
-                {
-                    fileLock = Convert.ToInt16(fileLockObj.ToString());
-                }
+                fileLock = (retVal.TryGetValue("fileLock", out object objFileLock) ? Convert.ToInt16(objFileLock.ToString()) : 0);
             }
             else
             {
-                GetError(retVal, out retCode, out string msg, out string extMsg);
                 if (this.verbosity)
                 {
+                    GetError(retVal, out retCode, out string msg, out string extMsg);
                     Console.WriteLine("- Error Occurred getFileLock, Code: " + retCode.ToString() + " Message: " + (msg != null ? msg.ToString() : "Not Available") + " Extended Message: " + (extMsg != null ? extMsg.ToString() : "Not Available"));
                 }
             }
@@ -2545,18 +2346,13 @@ namespace Stash
 
             if (retCode == 200)
             {
-                object fileIdObj;
-                retVal.TryGetValue("fileAliasId", out fileIdObj);
-                if (fileIdObj != null)
-                {
-                    fileAliasId = Convert.ToUInt64(fileIdObj.ToString());
-                }
+                fileAliasId = (retVal.TryGetValue("fileAliasId", out object objFileAliasId) ? Convert.ToUInt64(objFileAliasId.ToString()) : 0);
             }
             else
             {
-                GetError(retVal, out retCode, out string msg, out string extMsg);
                 if (this.verbosity)
                 {
+                    GetError(retVal, out retCode, out string msg, out string extMsg);
                     Console.WriteLine("- Error Occurred clearFileLock, Code: " + retCode.ToString() + " Message: " + (msg != null ? msg.ToString() : "Not Available") + " Extended Message: " + (extMsg != null ? extMsg.ToString() : "Not Available"));
                 }
             }
@@ -2583,18 +2379,13 @@ namespace Stash
 
             if (retCode == 200)
             {
-                object fileTagsObj;
-                retVal.TryGetValue("fileTags", out fileTagsObj);
-                if (fileTagsObj != null)
-                {
-                    strTags = fileTagsObj.ToString();
-                }
+                strTags = (retVal.TryGetValue("fileTags", out object objFileTags) ? objFileTags.ToString() : "");
             }
             else
             {
-                GetError(retVal, out retCode, out string msg, out string extMsg);
                 if (this.verbosity)
                 {
+                    GetError(retVal, out retCode, out string msg, out string extMsg);
                     Console.WriteLine("- Error Occurred getTags, Code: " + retCode.ToString() + " Message: " + (msg != null ? msg.ToString() : "Not Available") + " Extended Message: " + (extMsg != null ? extMsg.ToString() : "Not Available"));
                 }
             }
@@ -2621,18 +2412,13 @@ namespace Stash
 
             if (retCode == 200)
             {
-                object fileIdObj;
-                retVal.TryGetValue("fileAliasId", out fileIdObj);
-                if (fileIdObj != null)
-                {
-                    fileAliasId = Convert.ToUInt64(fileIdObj.ToString());
-                }
+                fileAliasId = (retVal.TryGetValue("fileAliasId", out object objFileAliasId) ? Convert.ToUInt64(objFileAliasId.ToString()) : 0);
             }
             else
             {
-                GetError(retVal, out retCode, out string msg, out string extMsg);
                 if (this.verbosity)
                 {
+                    GetError(retVal, out retCode, out string msg, out string extMsg);
                     Console.WriteLine("- Error Occurred clearFileLock, Code: " + retCode.ToString() + " Message: " + (msg != null ? msg.ToString() : "Not Available") + " Extended Message: " + (extMsg != null ? extMsg.ToString() : "Not Available"));
                 }
             }
@@ -2659,18 +2445,13 @@ namespace Stash
 
             if (retCode == 200)
             {
-                object fileIdObj;
-                retVal.TryGetValue("fileAliasId", out fileIdObj);
-                if (fileIdObj != null)
-                {
-                    fileAliasId = Convert.ToUInt64(fileIdObj.ToString());
-                }
+                fileAliasId = (retVal.TryGetValue("fileAliasId", out object objFileAliasId) ? Convert.ToUInt64(objFileAliasId.ToString()) : 0);
             }
             else
             {
-                GetError(retVal, out retCode, out string msg, out string extMsg);
                 if (this.verbosity)
                 {
+                    GetError(retVal, out retCode, out string msg, out string extMsg);
                     Console.WriteLine("- Error Occurred addTag, Code: " + retCode.ToString() + " Message: " + (msg != null ? msg.ToString() : "Not Available") + " Extended Message: " + (extMsg != null ? extMsg.ToString() : "Not Available"));
                 }
             }
@@ -2697,18 +2478,13 @@ namespace Stash
 
             if (retCode == 200)
             {
-                object fileIdObj;
-                retVal.TryGetValue("fileAliasId", out fileIdObj);
-                if (fileIdObj != null)
-                {
-                    fileAliasId = Convert.ToUInt64(fileIdObj.ToString());
-                }
+                fileAliasId = (retVal.TryGetValue("fileAliasId", out object objFileAliasId) ? Convert.ToUInt64(objFileAliasId.ToString()) : 0);
             }
             else
             {
-                GetError(retVal, out retCode, out string msg, out string extMsg);
                 if (this.verbosity)
                 {
+                    GetError(retVal, out retCode, out string msg, out string extMsg);
                     Console.WriteLine("- Error Occurred deleteTag, Code: " + retCode.ToString() + " Message: " + (msg != null ? msg.ToString() : "Not Available") + " Extended Message: " + (extMsg != null ? extMsg.ToString() : "Not Available"));
                 }
             }
@@ -2733,16 +2509,7 @@ namespace Stash
 
             if (retCode == 200)
             {
-                object folderId;
-                retVal.TryGetValue("folderId", out folderId);
-                if (folderId != null)
-                {
-                    dirId = Convert.ToUInt64(folderId.ToString());
-                }
-                else
-                {
-                    dirId = 0;
-                }
+                dirId = (retVal.TryGetValue("folderId", out object objFolderId) ? Convert.ToUInt64(objFolderId.ToString()) : 0);
             }
             else if (this.verbosity)
             {
@@ -2770,12 +2537,7 @@ namespace Stash
 
             if (retCode == 200)
             {
-                object folderId;
-                retVal.TryGetValue("folderId", out folderId);
-                if (folderId != null)
-                {
-                    dirId = Convert.ToUInt64(folderId.ToString());
-                }
+                dirId = (retVal.TryGetValue("folderId", out object objFolderId) ? Convert.ToUInt64(objFolderId.ToString()) : 0);
             }
             else if (this.verbosity)
             {
@@ -2803,12 +2565,7 @@ namespace Stash
 
             if (retCode == 200)
             {
-                object folderId;
-                retVal.TryGetValue("folderId", out folderId);
-                if (folderId != null)
-                {
-                    dirId = Convert.ToUInt64(folderId.ToString());
-                }
+                dirId = (retVal.TryGetValue("folderId", out object objFolderId) ? Convert.ToUInt64(objFolderId.ToString()) : 0);
             }
             else if (this.verbosity)
             {
@@ -2837,12 +2594,7 @@ namespace Stash
 
             if (retCode == 200)
             {
-                object folderId;
-                retVal.TryGetValue("folderId", out folderId);
-                if (folderId != null)
-                {
-                    dirId = Convert.ToUInt64(folderId.ToString());
-                }
+                dirId = (retVal.TryGetValue("folderId", out object objFolderId) ? Convert.ToUInt64(objFolderId.ToString()) : 0);
             }
             else if (this.verbosity)
             {
@@ -2869,11 +2621,7 @@ namespace Stash
 
             retCode = GetResponseCodeDict(apiResult, out retVal);
 
-            if (retCode == 200 || retCode == 404)
-            {
-                // Success, or fail silently because it doesn't exist
-            }
-            else if (this.verbosity)
+            if (retCode != 200 && this.verbosity)
             {
                 GetError(retVal, out int code, out string msg, out string extMsg);
                 Console.WriteLine("- Error Occurred Deleting Directory, Code: " + retCode.ToString() + " Message: " + (msg != null ? msg.ToString() : "Not Available") + " Extended Message: " + (extMsg != null ? extMsg.ToString() : "Not Available"));
@@ -2899,20 +2647,13 @@ namespace Stash
 
             if (retCode == 200)
             {
-                object fileInfo;
-                retVal.TryGetValue("fileInfo", out fileInfo);
-                if (fileInfo != null)
+                using (JsonDocument apiResponse = JsonDocument.Parse(apiResult))
                 {
-                    Dictionary<string, object> fileInfoDict = (Dictionary<string, object>)fileInfo;
-                    fileInfoDict.TryGetValue("fileName", out object objFileName);
-                    fileInfoDict.TryGetValue("fileSize", out object objFileSize);
-                    fileInfoDict.TryGetValue("fileTimestamp", out object objFileTimestamp);
-                    fileInfoDict.TryGetValue("fileAliasId", out object objFileAliasId);
-
-                    fileName = (objFileName != null ? objFileName.ToString() : "");
-                    fileSize = (objFileSize != null && objFileSize.ToString() != "-1" ? Convert.ToUInt64(objFileSize.ToString()) : 0);
-                    fileTimestamp = (objFileTimestamp != null ? Convert.ToUInt64(objFileTimestamp.ToString()) : 0);
-                    fileAliasId = (objFileAliasId != null ? Convert.ToUInt64(objFileAliasId) : 0);
+                    JsonElement fileInfo = apiResponse.RootElement.GetProperty("fileInfo");
+                    fileName = (fileInfo.TryGetProperty("fileName", out JsonElement fileNameElement) ? fileNameElement.GetString() : "");
+                    fileSize = (fileInfo.TryGetProperty("fileSize", out JsonElement fileSizeElement) ? fileSizeElement.GetUInt64() : 0);
+                    fileTimestamp = (fileInfo.TryGetProperty("fileTimestamp", out JsonElement fileTimestampElement) ? fileTimestampElement.GetUInt64() : 0);
+                    fileAliasId = (fileInfo.TryGetProperty("fileAliasId", out JsonElement fileAliasIdElement) ? fileAliasIdElement.GetUInt64() : 0);
                 }
             }
             else if (this.verbosity)
@@ -2958,11 +2699,7 @@ namespace Stash
 
             retCode = GetResponseCodeDict(apiResult, out retVal);
 
-            if (retCode == 200 || retCode == 404)            // Return the response even if the directory not found
-            {
-                // Data already in retVal
-            }
-            else if (this.verbosity)
+            if (retCode != 200 && retCode != 404 && this.verbosity)
             {
                 GetError(retVal, out int code, out string msg, out string extMsg);
                 Console.WriteLine("- Error Occurred GetSyncInfo, Code: " + retCode.ToString() + " Message: " + (msg != null ? msg.ToString() : "Not Available") + " Extended Message: " + (extMsg != null ? extMsg.ToString() : "Not Available"));
@@ -2978,7 +2715,6 @@ namespace Stash
             Dictionary<string, object> retVal = null;
 
             this.url = this.BASE_API_URL + "api2/file/getvaultinfo";
-            //if (!this.validateParams("none")) { throw new ArgumentException("Invalid Input Parameters"); }
             apiResult = this.SendRequest();
 
             if (this.dParams != null) { this.dParams.Clear(); }
@@ -3122,9 +2858,9 @@ namespace Stash
 
             if (retCode != 200)
             {
-                GetError(retVal, out int code, out string msg, out string extMsg);
                 if (this.verbosity)
                 {
+                    GetError(retVal, out int code, out string msg, out string extMsg);
                     Console.WriteLine("- Error Occurred isValidUser, Code: " + retCode.ToString() + " Message: " + (msg != null ? msg.ToString() : "Not Available") + " Extended Message: " + (extMsg != null ? extMsg.ToString() : "Not Available"));
                 }
             }
@@ -3245,7 +2981,6 @@ namespace Stash
         // Function reads (gets) a specific version of a file
         // Returns the JSON encoded response string to make it easier to parse by API caller
         public string readVersion(Dictionary<string, object> srcIdentifier, string fileNameOut, out int retCode)
-        //public Dictionary<string, object> getFile(Dictionary<string, object> srcIdentifier, string fileNameOut, out int retCode)
         {
             string apiResult = "";
             retCode = 0;
@@ -3266,14 +3001,13 @@ namespace Stash
             if (this.dParams != null) { this.dParams.Clear(); }
 
             if (apiResult == "1")
-            {         // Simulate a 200 OK if command succeeds
+            {   // Simulate a 200 OK if command succeeds
                 retCode = 200;
                 Dictionary<string, object> retVal = new Dictionary<string, object>();
                 retVal.Add("code", 200);
                 retVal.Add("message", "OK");
                 retVal.Add("fileName", fileNameOut);
 
-                //JavaScriptSerializer objSerializer = new JavaScriptSerializer();
                 apiResult = JsonSerializer.Serialize(retVal);
             }
             return apiResult;
@@ -3385,22 +3119,14 @@ namespace Stash
 
             if (retCode == 200)
             {
-                retVal.TryGetValue("fileAliasId", out object fileAliasIdObj);
-                retVal.TryGetValue("fileId", out object fileIdObj);
-                if (fileAliasIdObj != null)
-                {
-                    fileAliasId = Convert.ToUInt64(fileAliasIdObj.ToString());
-                }
-                if (fileIdObj != null)
-                {
-                    fileId = Convert.ToUInt64(fileIdObj.ToString());
-                }
+                fileAliasId = (retVal.TryGetValue("fileAliasId", out object objFileAliasId) ? Convert.ToUInt64(objFileAliasId.ToString()) : 0);
+                fileId = (retVal.TryGetValue("fileId", out object objFileId) ? Convert.ToUInt64(objFileId.ToString()) : 0);
             }
             else
             {
-                GetError(retVal, out retCode, out string msg, out string extMsg);
                 if (this.verbosity)
                 {
+                    GetError(retVal, out retCode, out string msg, out string extMsg);
                     Console.WriteLine("- Error Occurred WebErase Update, Code: " + retCode.ToString() + " Message: " + (msg != null ? msg.ToString() : "Not Available") + " Extended Message: " + (extMsg != null ? extMsg.ToString() : "Not Available"));
                 }
             }
@@ -3428,12 +3154,7 @@ namespace Stash
 
             if (retCode == 200)
             {
-                object objResult;
-                retVal.TryGetValue("token", out objResult);
-                if (objResult != null)
-                {
-                    token = objResult.ToString();
-                }
+                token = (retVal.TryGetValue("token", out object objToken) ? objToken.ToString() : "");
             }
             else if (this.verbosity)
             {
@@ -3497,27 +3218,15 @@ namespace Stash
 
             if (retCode == 200)
             {
-                retVal.TryGetValue("fileAliasId", out object fileAliasIdObj);
-                retVal.TryGetValue("fileId", out object fileIdObj);
-                retVal.TryGetValue("otc", out object otcObj);
-                if (fileAliasIdObj != null)
-                {
-                    fileAliasId = Convert.ToUInt64(fileAliasIdObj.ToString());
-                }
-                if (fileIdObj != null)
-                {
-                    fileId = Convert.ToUInt64(fileIdObj.ToString());
-                }
-                if (otcObj != null)
-                {
-                    oneTimeCode = Convert.ToInt32(otcObj.ToString());
-                }
+                fileAliasId = (retVal.TryGetValue("fileAliasId", out object objFileAliasId) ? Convert.ToUInt64(objFileAliasId.ToString()) : 0);
+                fileId = (retVal.TryGetValue("fileId", out object objFileId) ? Convert.ToUInt64(objFileId.ToString()) : 0);
+                oneTimeCode = (retVal.TryGetValue("otc", out object objOtc) ? Convert.ToInt32(objOtc.ToString()) : 0);
             }
             else
             {
-                GetError(retVal, out retCode, out string msg, out string extMsg);
                 if (this.verbosity)
                 {
+                    GetError(retVal, out retCode, out string msg, out string extMsg);
                     Console.WriteLine("- Error Occurred WebErase Store, Code: " + retCode.ToString() + " Message: " + (msg != null ? msg.ToString() : "Not Available") + " Extended Message: " + (extMsg != null ? extMsg.ToString() : "Not Available"));
                 }
             }
@@ -3555,7 +3264,7 @@ namespace Stash
             if (this.dParams != null) { this.dParams.Clear(); }
 
             if (apiResult == "1")
-            {         // Simulate a 200 OK if command succeeds
+            {   // Simulate a 200 OK if command succeeds
                 retCode = 200;
                 retVal.Add("code", "200");
                 retVal.Add("message", "OK");
@@ -3567,7 +3276,6 @@ namespace Stash
                 // Try to deserialize the response
                 try
                 {
-                    //JavaScriptSerializer objSerializer = new JavaScriptSerializer();
                     object objCheckDict = JsonSerializer.Deserialize(apiResult, typeof(object));
                     return (Dictionary<string, object>)objCheckDict;
                 }
@@ -3640,11 +3348,7 @@ namespace Stash
 
             if (retCode == 200)
             {
-                retVal.TryGetValue("otc_code", out object otcObj);
-                if (otcObj != null && otcObj.ToString() != "")
-                {
-                    oneTimeCode = Convert.ToInt32(otcObj.ToString());
-                }
+                oneTimeCode = (retVal.TryGetValue("otc_code", out object objOtc) ? Convert.ToInt32(objOtc.ToString()) : 0);
             }
             else if (retCode != 200 && this.verbosity)
             {
@@ -3662,8 +3366,7 @@ namespace Stash
 
             try
             {
-                //JavaScriptSerializer objSerializer = new JavaScriptSerializer();
-                retVal = (Dictionary<string, object>)JsonSerializer.Deserialize(apiResult, typeof(object));
+                retVal = JsonSerializer.Deserialize<Dictionary<string, object>>(apiResult);
 
                 // Get return code from the result
                 object tCode;
@@ -3688,26 +3391,46 @@ namespace Stash
         public static void GetError(Dictionary<string, object> responseIn, out int code, out string msg, out string extMsg)
         {
             code = 0; msg = ""; extMsg = "";
-            object val1 = null; object val2 = null; object val3 = null;
+            //object val1 = null; object val2 = null; object val3 = null;
 
             if (responseIn == null) { code = -1; msg = "Response was Null"; extMsg = ""; return; }
 
-            responseIn.TryGetValue("code", out val1);
-            code = (val1 != null ? Convert.ToInt32(val1.ToString()) : 0);
-
-            responseIn.TryGetValue("message", out val2);
-            msg = (val2 != null ? val2.ToString() : "Not Available");
-
-            object extError = null;
-            responseIn.TryGetValue("error", out extError);
-
-            if (extError != null)
-            {
-                Dictionary<string, object> extErrorDict = (Dictionary<string, object>)extError;
-                extErrorDict.TryGetValue("extendedErrorMessage", out val3);
+            if (responseIn.TryGetValue("code", out object je1)) {
+                code = (((JsonElement)je1).TryGetInt32(out code) ? code : 0);
             }
-            extMsg = (val3 != null ? val3.ToString() : "Not Available");
+
+            if (responseIn.TryGetValue("message", out object je2)) {
+                msg = ((JsonElement)je2).ToString();
+            }
+
+            if (responseIn.TryGetValue("error", out object extError))
+            {
+                string tStr = ((JsonElement)extError).ToString();
+                ExtendedError extErr = JsonSerializer.Deserialize<ExtendedError>(tStr);
+                extMsg = extErr.extendedErrorMessage;
+            }
         }
+
+        // Parses the return string result (JSON-encoded string) to get the error code, message, and extended message
+        public static void GetError(string responseIn, out int code, out string msg, out string extMsg)
+        {
+            code = 0; msg = ""; extMsg = "";
+            try
+            {
+                if (responseIn == null || responseIn == "") { throw new Exception("Empty API Error Response"); }
+
+                apiError apiErr = JsonSerializer.Deserialize<apiError>(responseIn);
+                code = apiErr.code;
+                msg = apiErr.message;
+                extMsg = apiErr.error.extendedErrorMessage;
+            } catch (Exception ex)
+            {
+                code = -1;
+                msg = "Error Reading API Error Response: " + ex.Message;
+                extMsg = "";
+            }
+        }
+
 
         public static bool IsStringArraysEqual(string[] arr1, string[] arr2)
         {
@@ -3790,5 +3513,18 @@ namespace Stash
                 return false;
             }
         }
+    }
+
+    public class ExtendedError
+    {
+        public int errorCode { get; set; }
+        public string extendedErrorMessage { get; set; }
+    }
+
+    public class apiError
+    {
+        public int code { get; set; }
+        public string message { get; set; }
+        public ExtendedError error { get; set; }
     }
 }
