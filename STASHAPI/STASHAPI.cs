@@ -1016,7 +1016,8 @@ namespace Stash
                     string[] strFolderNames = (string[])tFolderNames;
                     if (strFolderNames.Length > 0) { return true; }
                 }
-                throw new ArgumentException("Source Parameters Invalid - folderId or folderNames MUST be specified");
+                if (this.dParams.TryGetValue("filePath", out object tFilePath) && tFilePath != null && tFilePath.ToString() != "") { return true; }
+                throw new ArgumentException("Source Parameters Invalid - folderId or folderNames or filePath MUST be specified");
             }
             else
             {
@@ -1037,7 +1038,8 @@ namespace Stash
                         if (strFolderNames.Length > 0) { return true; }
                     }
                 }
-                throw new ArgumentException("Source Parameters Invalid - fileId or fileName plus either folderId or folderNames MUST be specified");
+                if (this.dParams.TryGetValue("filePath", out object tFilePath) && tFilePath != null && tFilePath.ToString() != "") { return true; }
+                throw new ArgumentException("Source Parameters Invalid - fileId or fileName plus either folderId or folderNames, or filePath MUST be specified");
             }
         }
 
