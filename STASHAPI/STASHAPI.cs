@@ -603,7 +603,7 @@ namespace Stash
         }
 
         // Downloads a file from the Vault and stores it in _fileNameIn_
-        public string sendDownloadRequest(string fileNameIn)
+        public string sendDownloadRequest(string fileNameIn, int timeOut)
         {
             string payload = "";
 
@@ -641,6 +641,8 @@ namespace Stash
                 objHWR.Method = WebRequestMethods.Http.Post;
                 objHWR.ContentType = "application/json";
                 objHWR.ContentLength = payloadBytes.LongLength;
+                objHWR.Timeout = timeOut * 1000;
+                
                 sendStream = objHWR.GetRequestStream();
                 sendStream.Write(payloadBytes, 0, payloadBytes.Length);
                 sendStream.Close();
@@ -696,8 +698,8 @@ namespace Stash
             }
         }
 
-        // Uploads a file to the server
-        public string SendFileRequest(string fileNameIn)
+        // Uploads a file to the server with a set timeOut
+        public string SendFileRequest(string fileNameIn, int timeOut)
         {
             string retVal = "";
 
@@ -726,7 +728,7 @@ namespace Stash
 
             HttpWebRequest requestToServer = (HttpWebRequest)WebRequest.Create(this.url);
             string boundaryString = "----" + genRandomString(24);
-            requestToServer.Timeout = 180000;
+            requestToServer.Timeout = timeOut * 1000;
             requestToServer.AllowWriteStreamBuffering = false;
             requestToServer.Method = WebRequestMethods.Http.Post;
             requestToServer.ContentType = "multipart/form-data; boundary=" + boundaryString;
@@ -820,7 +822,7 @@ namespace Stash
 
         // Uploads a file to the server in chunks. While the functions are awaited, the chunks are being uploaded to the file synchronously.
         //TODO: Update function to upload chunks asynchronously
-        public async Task<string> SendFileRequestChunked(string fileNameIn, Action<ulong, string> callback, System.Threading.CancellationTokenSource ct)
+        public async Task<string> SendFileRequestChunked(string fileNameIn, int chunkSize, int timeOut, Action<ulong, ulong, string> callback, System.Threading.CancellationTokenSource ct)
         {
             string retVal = "";
 
@@ -840,11 +842,9 @@ namespace Stash
               .Select(s => s[random.Next(s.Length)]).ToArray());
             chunkedParams.Add("temp_name", temp_name);
 
-            int chunkSize = 1000000;
-
-            if ((int)uploadFile.Length < chunkSize)
+            if (uploadFile.Length < chunkSize)
             {
-                chunkSize = (int)uploadFile.Length;  // if the file is smaller than the chunk size, upload the file as one chunk
+                chunkSize = Convert.ToInt32(uploadFile.Length);  // if the file is smaller than the chunk size, upload the file as one chunk
             }
 
             byte[] buffer = new byte[chunkSize];
@@ -940,6 +940,7 @@ namespace Stash
                         byte[] strParamsBytes = ascii.GetBytes(apiParameters);
                         byte[] chunkedParamBytes = ascii.GetBytes(chunkedParameters);
                         HttpClient requestToServer = new HttpClient();
+                        requestToServer.Timeout = new TimeSpan(0, 0, timeOut);
                         MultipartFormDataContent form = new MultipartFormDataContent();
                         form.Add(data, "file", fileNameIn.Substring(pos, fileNameIn.Length - pos));
                         form.Add(new ByteArrayContent(strParamsBytes), "params");
@@ -951,13 +952,13 @@ namespace Stash
 
                             retVal = response.Content.ReadAsStringAsync().Result;
                             ulong fileLength = Convert.ToUInt64(fileStream.Length);
-                            ulong processedBytes = Convert.ToUInt64(buffer.Length * i);
+                            ulong processedBytes = (ulong)buffer.Length * (ulong)i;
                             ulong total = Convert.ToUInt64(fileLength - processedBytes);
 
 
                             if (i < totalChunks)
                             {
-                                callback(processedBytes, fileNameIn);
+                                callback(fileLength, processedBytes, fileNameIn);
                             }
 
 
@@ -1745,7 +1746,7 @@ namespace Stash
         // STASH API HELPER FUNCTIONS
         // *********************************************************************************************
         // Downloads a file from the user's vault
-        public string getFile(Dictionary<string, object> srcIdentifier, string fileNameOut, out int retCode)
+        public string getFile(Dictionary<string, object> srcIdentifier, string fileNameOut, int timeOut, out int retCode)
         {
             string apiResult = "";
             retCode = 0;
@@ -1763,7 +1764,7 @@ namespace Stash
 
             if (!this.validateParams("read")) { throw new ArgumentException("Invalid Input Parameters"); }
 
-            apiResult = this.sendDownloadRequest(fileNameOut);
+            apiResult = this.sendDownloadRequest(fileNameOut, timeOut);
             if (this.dParams != null) { this.dParams.Clear(); }
 
             if (apiResult == "1")
@@ -1773,13 +1774,13 @@ namespace Stash
                 retVal.Add("message", "OK");
                 retVal.Add("fileName", fileNameOut);
                 apiResult = JsonSerializer.Serialize(retVal);
-            } 
+            }
 
             return apiResult;
         }
 
         // Uploads file to the user's Vault
-        public Dictionary<string, object> putFile(string fileNameIn, Dictionary<string, object> srcIdentifier, out int retCode, out UInt64 fileId, out UInt64 fileAliasId)
+        public Dictionary<string, object> putFile(string fileNameIn, Dictionary<string, object> srcIdentifier, int timeOut, out int retCode, out UInt64 fileId, out UInt64 fileAliasId)
         {
             string apiResult = "";
             retCode = 0;
@@ -1846,7 +1847,7 @@ namespace Stash
             this.url = this.BASE_API_URL + "api2/file/write";
             if (!this.validateParams("write")) { throw new ArgumentException("Invalid Input Parameters"); }
 
-            apiResult = this.SendFileRequest(fileNameIn);
+            apiResult = this.SendFileRequest(fileNameIn, timeOut);
             if (this.dParams != null) { this.dParams.Clear(); }
 
             retCode = GetResponseCodeDict(apiResult, out retVal);
@@ -1880,7 +1881,7 @@ namespace Stash
 
         // Uploads a file to the Vault Support system
         // This is used to transmit log/troubleshooting data from clients to a central repository on the server
-        public Dictionary<string, object> putFileSupport(string fileNameIn, out int retCode, out string msg, out string extMsg)
+        public Dictionary<string, object> putFileSupport(string fileNameIn, int timeOut, out int retCode, out string msg, out string extMsg)
         {
             string apiResult = ""; msg = ""; extMsg = ""; retCode = 0;
             Dictionary<string, object> retVal = null;
@@ -1893,7 +1894,7 @@ namespace Stash
 
             this.url = this.BASE_API_URL + "api2/support/writesupport";
 
-            apiResult = this.SendFileRequest(fileNameIn);
+            apiResult = this.SendFileRequest(fileNameIn, timeOut);
 
             retCode = GetResponseCodeDict(apiResult, out retVal);
 
@@ -1910,7 +1911,7 @@ namespace Stash
         }
 
         // Uploads file to the user's Vault using Chunks
-        public Dictionary<string, object> putFileChunked(string fileNameIn, Dictionary<string, object> srcIdentifier, Action<ulong, string> callback, System.Threading.CancellationTokenSource ct, out int retCode, out UInt64 fileId, out UInt64 fileAliasId)
+        public Dictionary<string, object> putFileChunked(string fileNameIn, Dictionary<string, object> srcIdentifier, int chunkSize, int timeOut, Action<ulong, ulong, string> callback, System.Threading.CancellationTokenSource ct, out int retCode, out UInt64 fileId, out UInt64 fileAliasId)
         {
             string apiResult = "";
             retCode = 0;
@@ -1976,7 +1977,7 @@ namespace Stash
             this.url = this.BASE_API_URL + "api2/file/writechunked";
             if (!this.validateParams("write")) { throw new ArgumentException("Invalid Input Parameters"); }
 
-            apiResult = this.SendFileRequestChunked(fileNameIn, callback, ct).Result;
+            apiResult = this.SendFileRequestChunked(fileNameIn, chunkSize, timeOut, callback, ct).Result;
             if (this.dParams != null) { this.dParams.Clear(); }
 
             retCode = GetResponseCodeDict(apiResult, out retVal);
@@ -2133,7 +2134,7 @@ namespace Stash
         }
 
         // Lists the files and folders in the user's Vault, or in a specified folder in the vault
-        public Dictionary<string, object> listAll(Dictionary<string, object> srcIdentifier, out int retCode)
+        public string listAll(Dictionary<string, object> srcIdentifier, out int retCode)
         {
             string apiResult = "";
             retCode = 0;
@@ -2155,7 +2156,7 @@ namespace Stash
                 Console.WriteLine("- Error Occurred listAll, Code: " + retCode.ToString() + " Message: " + (msg != null ? msg.ToString() : "Not Available") + " Extended Message: " + (extMsg != null ? extMsg.ToString() : "Not Available"));
             }
 
-            return retVal;
+            return apiResult;
         }
 
         // Lists the files in the user's Vault, or in a specified folder in the vault
@@ -2984,7 +2985,7 @@ namespace Stash
 
         // Function reads (gets) a specific version of a file
         // Returns the JSON encoded response string to make it easier to parse by API caller
-        public string readVersion(Dictionary<string, object> srcIdentifier, string fileNameOut, out int retCode)
+        public string readVersion(Dictionary<string, object> srcIdentifier, string fileNameOut, int timeOut, out int retCode)
         {
             string apiResult = "";
             retCode = 0;
@@ -3001,7 +3002,7 @@ namespace Stash
 
             if (!this.validateParams("readversion")) { throw new ArgumentException("Invalid Input Parameters"); }
 
-            apiResult = this.sendDownloadRequest(fileNameOut);
+            apiResult = this.sendDownloadRequest(fileNameOut, timeOut);
             if (this.dParams != null) { this.dParams.Clear(); }
 
             if (apiResult == "1")
@@ -3099,7 +3100,7 @@ namespace Stash
         }
 
         // Uploads file to the user's Vault
-        public Dictionary<string, object> webEraseUpdate(string fileNameIn, Dictionary<string, object> srcIdentifier, out int retCode, out UInt64 fileId, out UInt64 fileAliasId)
+        public Dictionary<string, object> webEraseUpdate(string fileNameIn, Dictionary<string, object> srcIdentifier, int timeOut, out int retCode, out UInt64 fileId, out UInt64 fileAliasId)
         {
             string apiResult = "";
             retCode = 0;
@@ -3116,7 +3117,7 @@ namespace Stash
             this.dParams = srcIdentifier;
             if (!this.validateParams("weberaseupdate")) { throw new ArgumentException("Invalid Input Parameters"); }
 
-            apiResult = this.SendFileRequest(fileNameIn);
+            apiResult = this.SendFileRequest(fileNameIn, timeOut);
             if (this.dParams != null) { this.dParams.Clear(); }
 
             retCode = GetResponseCodeDict(apiResult, out retVal);
@@ -3198,7 +3199,7 @@ namespace Stash
         }
 
         // Uploads file to the user's Vault
-        public Dictionary<string, object> webEraseStore(string fileNameIn, Dictionary<string, object> srcIdentifier, out int retCode, out UInt64 fileId, out UInt64 fileAliasId, out int oneTimeCode)
+        public Dictionary<string, object> webEraseStore(string fileNameIn, Dictionary<string, object> srcIdentifier, int timeOut, out int retCode, out UInt64 fileId, out UInt64 fileAliasId, out int oneTimeCode)
         {
             string apiResult = "";
             retCode = 0;
@@ -3215,7 +3216,7 @@ namespace Stash
             this.dParams = srcIdentifier;
             if (!this.validateParams("weberasestore")) { throw new ArgumentException("Invalid Input Parameters"); }
 
-            apiResult = this.SendFileRequest(fileNameIn);
+            apiResult = this.SendFileRequest(fileNameIn, timeOut);
             if (this.dParams != null) { this.dParams.Clear(); }
 
             retCode = GetResponseCodeDict(apiResult, out retVal);
@@ -3239,7 +3240,7 @@ namespace Stash
         }
 
         // Downloads a file from the user's vault or polls for a file pending transaction validation
-        private Dictionary<string, object> webEraseDownload(Dictionary<string, object> srcIdentifier, string fileNameOut, bool polling, out int retCode)
+        private Dictionary<string, object> webEraseDownload(Dictionary<string, object> srcIdentifier, string fileNameOut, int timeOut, bool polling, out int retCode)
         {
             string apiResult = "";
             retCode = 0;
@@ -3264,7 +3265,7 @@ namespace Stash
             // Params are validated the same for retrieve and polling
             if (!this.validateParams("weberaseretrieve")) { throw new ArgumentException("Invalid Input Parameters"); }
 
-            apiResult = this.sendDownloadRequest(fileNameOut);
+            apiResult = this.sendDownloadRequest(fileNameOut, timeOut);
             if (this.dParams != null) { this.dParams.Clear(); }
 
             if (apiResult == "1")
@@ -3294,17 +3295,17 @@ namespace Stash
         }
 
         // Downloads a file from the user's vault
-        public Dictionary<string, object> webEraseRetrieve(Dictionary<string, object> srcIdentifier, string fileNameOut, out int retCode)
+        public Dictionary<string, object> webEraseRetrieve(Dictionary<string, object> srcIdentifier, string fileNameOut, int timeOut, out int retCode)
         {
             retCode = 0;
-            return webEraseDownload(srcIdentifier, fileNameOut, false, out retCode);
+            return webEraseDownload(srcIdentifier, fileNameOut, timeOut, false, out retCode);
         }
 
         // Polls and downloads a file pending transaction validation
-        public Dictionary<string, object> webErasePolling(Dictionary<string, object> srcIdentifier, string fileNameOut, out int retCode)
+        public Dictionary<string, object> webErasePolling(Dictionary<string, object> srcIdentifier, string fileNameOut, int timeOut, out int retCode)
         {
             retCode = 0;
-            return webEraseDownload(srcIdentifier, fileNameOut, true, out retCode);
+            return webEraseDownload(srcIdentifier, fileNameOut, timeOut, true, out retCode);
         }
 
         // Function deletes the file specified by the token
