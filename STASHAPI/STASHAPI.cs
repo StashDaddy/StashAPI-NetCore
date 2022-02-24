@@ -1,5 +1,5 @@
 /* This is a Visual Studio Shared Project
- * This library requires .NET 5.0 (formerly .NET Core) due to System.Text.Json instead of System.Web.Script.Serialization.JsonSerializer
+ * This library requires .NET 5.0+ (formerly .NET Core) due to System.Text.Json instead of System.Web.Script.Serialization.JsonSerializer
  *
  * To use this project, add the project to your existing solution (Add->existing project->stashapi.shproj), then add a reference to the shared
  * project from your existing code/application project (Add->shared project reference->Shared Projects)
