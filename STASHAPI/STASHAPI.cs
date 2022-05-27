@@ -561,6 +561,7 @@ namespace Stash
             if (this.url == "") { throw new ArgumentException("Invalid URL"); }
 
             System.Net.HttpWebRequest objHWR = (HttpWebRequest)WebRequest.Create(this.url);
+            
             Dictionary<string, object> apiParams = new Dictionary<string, object>();
             apiParams.Add("url", this.url);
             apiParams.Add("api_version", this.api_version);
@@ -582,10 +583,11 @@ namespace Stash
             // Build payload
             payload = JsonSerializer.Serialize(apiParams);       // apiParams is already merged if need be in signature above
             byte[] payloadBytes = Encoding.UTF8.GetBytes(payload);
-
+           
             objHWR.Method = WebRequestMethods.Http.Post;
             objHWR.ContentType = "application/json";
             objHWR.ContentLength = payloadBytes.Length;
+
             System.IO.Stream sendStream = objHWR.GetRequestStream();
             sendStream.Write(payloadBytes, 0, payloadBytes.Length);
             sendStream.Close();
@@ -932,6 +934,16 @@ namespace Stash
                         chunkedParams.Add("progress", i + "/" + totalChunks);
 
                         int pos = fileNameIn.LastIndexOf("\\") + 1;
+
+                        // Update timestamp and signature in apiParams with each chunk
+                        // Each chunk MUST be able to be sent in the timeout period set by timestamp
+                        this.api_timestamp = 0;        // Set to current timestamp
+                        apiParams.Remove("api_timestamp");
+                        apiParams.Remove("api_signature");
+                        apiParams.Add("api_timestamp", this.api_timestamp);
+                        this.setSignature(apiParams);
+                        apiParams.Add("api_signature", this.getSignature());
+                        
                         var apiParameters = JsonSerializer.Serialize(apiParams);
                         var chunkedParameters = JsonSerializer.Serialize(chunkedParams);
                         ASCIIEncoding ascii = new ASCIIEncoding();
@@ -955,12 +967,10 @@ namespace Stash
                             ulong processedBytes = (ulong)buffer.Length * (ulong)i;
                             ulong total = Convert.ToUInt64(fileLength - processedBytes);
 
-
                             if (i < totalChunks)
                             {
                                 callback(fileLength, processedBytes, fileNameIn);
                             }
-
 
                             if ((fileLength - processedBytes) < Convert.ToUInt64(chunkSize))
                             {
@@ -2636,7 +2646,7 @@ namespace Stash
         }
 
         // Gets information for the specified file in the user's vault
-        public Dictionary<string, object> getFileInfo(Dictionary<string, object> srcIdentifier, out int retCode, out string fileName, out UInt64 fileSize, out UInt64 fileTimestamp, out ulong fileAliasId)
+        public string getFileInfo(Dictionary<string, object> srcIdentifier, out int retCode, out string fileName, out UInt64 fileSize, out UInt64 fileTimestamp, out ulong fileAliasId)
         {
             string apiResult = ""; retCode = 0; fileName = ""; fileSize = 0; fileTimestamp = 0; fileAliasId = 0;
             Dictionary<string, object> retVal = null;
@@ -2656,7 +2666,7 @@ namespace Stash
                 {
                     JsonElement fileInfo = apiResponse.RootElement.GetProperty("fileInfo");
                     fileName = (fileInfo.TryGetProperty("fileName", out JsonElement fileNameElement) ? fileNameElement.GetString() : "");
-                    fileSize = (fileInfo.TryGetProperty("fileSize", out JsonElement fileSizeElement) ? fileSizeElement.GetUInt64() : 0);
+                    fileSize = (fileInfo.TryGetProperty("fileSize", out JsonElement fileSizeElement) ? Convert.ToUInt64(fileSizeElement.GetString()) : 0);
                     fileTimestamp = (fileInfo.TryGetProperty("fileTimestamp", out JsonElement fileTimestampElement) ? fileTimestampElement.GetUInt64() : 0);
                     fileAliasId = (fileInfo.TryGetProperty("fileAliasId", out JsonElement fileAliasIdElement) ? fileAliasIdElement.GetUInt64() : 0);
                 }
@@ -2667,11 +2677,11 @@ namespace Stash
                 Console.WriteLine("- Error Occurred GetFileInfo, Code: " + retCode.ToString() + " Message: " + (msg != null ? msg.ToString() : "Not Available") + " Extended Message: " + (extMsg != null ? extMsg.ToString() : "Not Available"));
             }
 
-            return retVal;
+            return apiResult;
         }
 
         // Gets information for the specified folder in the user's vault
-        public Dictionary<string, object> getFolderInfo(Dictionary<string, object> srcIdentifier, out int retCode)
+        public string getFolderInfo(Dictionary<string, object> srcIdentifier, out int retCode)
         {
             string apiResult = "";
             retCode = 0;
@@ -2686,7 +2696,7 @@ namespace Stash
 
             retCode = GetResponseCodeDict(apiResult, out retVal);
 
-            return retVal;
+            return apiResult;
         }
 
         // Gets sync information for the specified folder in the user's vault
@@ -3517,6 +3527,47 @@ namespace Stash
             {
                 return false;
             }
+        }
+
+        /*
+         * Converts a destination dictionary to a source dictionary
+         * Useful for calling getFileInfo() before a write/writechunked operation to check if the destination exists
+         * if allKeys = true, will convert all keys, otherwise will just convert/copy destFileName, destFolderNames, destFolderId, and destFilePath
+         */
+        public Dictionary<string, object> convertDestinationToSourceDictionary(Dictionary<string, object> destDictIn, bool allKeys)
+        {
+            // Copy all keys in the dictionary, but rename "destFileName", "destFolderNames", "destFolderId", "destFilePath"
+            Dictionary<string, object> result = new Dictionary<string, object>();
+
+            foreach (KeyValuePair<string, object> keyValue in destDictIn)
+            {
+                if (keyValue.Key == "destFileName")
+                {
+                    result.Add("fileName", keyValue.Value.ToString());
+                }
+                else if (keyValue.Key == "destFolderNames")
+                {
+                    result.Add("folderNames", keyValue.Value);
+                    // To Do - unknow deep or shallow copy of a string array
+                }
+                else if (keyValue.Key == "destFolderId")
+                {
+                    result.Add("folderId", keyValue.Value.ToString());
+                }
+                else if (keyValue.Key == "destFilePath")
+                {
+                    result.Add("filePath", keyValue.Value.ToString());
+                }
+                else
+                {
+                    if (allKeys)
+                    {
+                        result.Add(keyValue.Key, keyValue.Value.ToString());
+                    }
+                }
+            }
+
+            return result;
         }
     }
 
