@@ -39,6 +39,8 @@ namespace Stash
         public const int STASH_ENC_BLOCKSIZE = 1024;        // The size of the data block to encrypt; must match the blocksize used in the decryption platform - IV.length
         public const int STASH_DEC_BLOCKSIZE = 1040;        // The size of the data block to decrypt; must be STASH_ENC_BLOCKSIZE + IV.length; must match the blocksize used in the encryption platform + IV.length
 
+        private static readonly HttpClient client = new HttpClient();
+
         private string _api_id;             // The API_ID For your account
         public string api_id
         {
@@ -551,6 +553,16 @@ namespace Stash
             return retVal;
         }
 
+        /*
+         * Posts a string of JSON (payload) to the specified URI and returns the string response
+         * See https://carldesouza.com/httpclient-getasync-postasync-sendasync-c/
+        */
+        public async Task<string> PostURI(string uri, string payload)
+        {
+            HttpResponseMessage response = await client.PostAsync(uri, new StringContent(payload, Encoding.UTF8, "application/json"));
+            return await response.Content.ReadAsStringAsync();
+        }
+
         // Sends a generic request to the API
         public string SendRequest()
         {
@@ -560,8 +572,8 @@ namespace Stash
             if (this.verbosity) { Console.WriteLine(" - sendRequest - "); }
             if (this.url == "") { throw new ArgumentException("Invalid URL"); }
 
-            System.Net.HttpWebRequest objHWR = (HttpWebRequest)WebRequest.Create(this.url);
-            
+            //System.Net.HttpWebRequest objHWR = (HttpWebRequest)WebRequest.Create(this.url);
+
             Dictionary<string, object> apiParams = new Dictionary<string, object>();
             apiParams.Add("url", this.url);
             apiParams.Add("api_version", this.api_version);
@@ -582,23 +594,28 @@ namespace Stash
 
             // Build payload
             payload = JsonSerializer.Serialize(apiParams);       // apiParams is already merged if need be in signature above
-            byte[] payloadBytes = Encoding.UTF8.GetBytes(payload);
+            //byte[] payloadBytes = Encoding.UTF8.GetBytes(payload);
            
-            objHWR.Method = WebRequestMethods.Http.Post;
-            objHWR.ContentType = "application/json";
-            objHWR.ContentLength = payloadBytes.Length;
+            //objHWR.Method = WebRequestMethods.Http.Post;
+            //objHWR.ContentType = "application/json";
+            //objHWR.ContentLength = payloadBytes.Length;
 
-            System.IO.Stream sendStream = objHWR.GetRequestStream();
-            sendStream.Write(payloadBytes, 0, payloadBytes.Length);
-            sendStream.Close();
+            //System.IO.Stream sendStream = objHWR.GetRequestStream();
+            //sendStream.Write(payloadBytes, 0, payloadBytes.Length);
+            //sendStream.Close();
 
-            WebResponse objResponse = objHWR.GetResponse();
-            sendStream = objResponse.GetResponseStream();
-            System.IO.StreamReader reader = new System.IO.StreamReader(sendStream);
-            retVal = reader.ReadToEnd();
-            reader.Close();
-            sendStream.Close();
-            objResponse.Close();
+            //WebResponse objResponse = objHWR.GetResponse();
+            //sendStream = objResponse.GetResponseStream();
+            //System.IO.StreamReader reader = new System.IO.StreamReader(sendStream);
+            //retVal = reader.ReadToEnd();
+            //reader.Close();
+            //sendStream.Close();
+            //objResponse.Close();
+
+            var t = Task.Run(() => PostURI(this.url, payload));
+            t.Wait();
+            retVal = t.Result;
+            //Console.WriteLine("Result: " + t.Result);   
 
             if (this.verbosity) { Console.WriteLine("- sendRequest Complete - Result: " + retVal); }
             return retVal;
