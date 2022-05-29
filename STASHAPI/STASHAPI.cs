@@ -19,6 +19,7 @@ using System.Net;                       // Reference: System
 using System.Web;                       // Reference: System.Web 
 using System.Collections.Generic;       // Reference: System
 using System.Globalization;             // Reference: System
+using System.Threading;                 // Reference: System
 using System.Threading.Tasks;           // Reference: System
 using System.IO;                        // Reference: System
 using System.Net.Http;                  // Reference: System.Net.Http
@@ -26,7 +27,7 @@ using System.Linq;                      // Reference: System
 
 namespace Stash
 {
-    public class StashAPI
+    public class StashAPI : Object
     {
         public const string STASHAPI_VERSION = "1.0";       // API Version
         public const int STASHAPI_ID_LENGTH = 32;        // api_id String length
@@ -156,7 +157,7 @@ namespace Stash
         }
 
         // Returns a string representation of this object
-        public string __toString()
+        public override string ToString()
         {
             return "STASHAPI Object - Version: " + this.api_version + " ID: " + this.api_id;
         }
@@ -563,6 +564,17 @@ namespace Stash
             return await response.Content.ReadAsStringAsync();
         }
 
+        /*
+         * Posts a string of JSON (payload) to the specified URI and returns a stream for the response (e.g. when downloading a file)
+         * See https://www.tugberkugurlu.com/archive/efficiently-streaming-large-http-responses-with-httpclient
+         */
+        public async Task<Stream> PostURIasStream(string uri, string payload, double timeOutIn, CancellationToken ct)
+        {
+            client.Timeout = TimeSpan.FromSeconds(timeOutIn);
+            HttpResponseMessage response = await client.PostAsync(uri, new StringContent(payload, Encoding.UTF8, "application/json"), ct);
+            return response.Content.ReadAsStream(ct);
+        }
+
         // Sends a generic request to the API
         public string SendRequest()
         {
@@ -629,12 +641,12 @@ namespace Stash
             if (this.verbosity) { Console.WriteLine(" - sendDownloadRequest - "); }
             if (this.url == "") { throw new ArgumentException("Invalid URL"); }
             System.IO.FileStream fileStream = null;
-            WebResponse objResponse = null;
+            //WebResponse objResponse = null;
             System.IO.Stream sendStream = null;
 
             try
             {
-                System.Net.HttpWebRequest objHWR = (HttpWebRequest)WebRequest.Create(this.url);
+                //System.Net.HttpWebRequest objHWR = (HttpWebRequest)WebRequest.Create(this.url);
                 Dictionary<string, object> apiParams = new Dictionary<string, object>();
                 apiParams.Add("url", this.url);
                 apiParams.Add("api_version", this.api_version);
@@ -655,19 +667,24 @@ namespace Stash
 
                 // Build payload
                 payload = JsonSerializer.Serialize(apiParams);       // apiParams is already merged if need be in signature above
-                byte[] payloadBytes = Encoding.UTF8.GetBytes(payload);
+                                                                     //byte[] payloadBytes = Encoding.UTF8.GetBytes(payload);
 
-                objHWR.Method = WebRequestMethods.Http.Post;
-                objHWR.ContentType = "application/json";
-                objHWR.ContentLength = payloadBytes.LongLength;
-                objHWR.Timeout = timeOut * 1000;
-                
-                sendStream = objHWR.GetRequestStream();
-                sendStream.Write(payloadBytes, 0, payloadBytes.Length);
-                sendStream.Close();
+                //objHWR.Method = WebRequestMethods.Http.Post;
+                //objHWR.ContentType = "application/json";
+                //objHWR.ContentLength = payloadBytes.LongLength;
+                //objHWR.Timeout = timeOut * 1000;
 
-                objResponse = objHWR.GetResponse();
-                sendStream = objResponse.GetResponseStream();
+                var t = Task.Run(() => PostURIasStream(this.url, payload, timeOut, new CancellationToken()));
+                t.Wait();
+                sendStream = t.Result;
+                //retVal = t.Result;
+
+                //sendStream = objHWR.GetRequestStream();
+                //sendStream.Write(payloadBytes, 0, payloadBytes.Length);
+                //sendStream.Close();
+
+                //objResponse = objHWR.GetResponse();
+                //sendStream = objResponse.GetResponseStream();
 
                 int bufferSize = STASHAPI_FILE_BUFFER_SIZE;
                 byte[] buffer = new byte[bufferSize];
@@ -713,7 +730,7 @@ namespace Stash
             {
                 if (fileStream != null) { fileStream.Close(); }
                 if (sendStream != null) { sendStream.Close(); }
-                if (objResponse != null) { objResponse.Close(); }
+                //if (objResponse != null) { objResponse.Close(); }
             }
         }
 
@@ -721,6 +738,38 @@ namespace Stash
         public string SendFileRequest(string fileNameIn, int timeOut)
         {
             string retVal = "";
+
+            long fileSize = new FileInfo(fileNameIn).Length;
+
+            // Placeholder / empty callback - this is empty because this is intended for single, small file uploads, anything else should use SendFileRequestChunked / PutFileChunked
+            Action<ulong, ulong, string> callback = (fileSize, processedBytes, name) =>
+            {
+                //double pct = 0;
+                //if (fileSize > 0)
+                //{
+                //    pct = Math.Round((double)processedBytes / (double)fileSize * 100);
+                //}
+                //if (pct < 0) { pct = 0; }
+                //else if (pct > 100) { pct = 100; }
+                //string strPct = String.Concat(pct, "%");
+
+                //statusUpdate.Turn("Uploading File... ", " " + strPct + " (" + processedBytes + "/" + fileSize + ")", "Uploading File", "");
+            };
+
+            // CancellationTokenSource
+            var t = Task.Run(() => this.SendFileRequestChunked(fileNameIn, Convert.ToInt32(fileSize), timeOut, callback, new CancellationTokenSource()));
+            t.Wait();
+            retVal = t.Result;
+
+            if (this.verbosity)
+            {
+                Console.WriteLine("- sendFileRequest Complete - Result: " + retVal);
+            }
+            
+            return retVal;
+
+            //string retVal = await this.SendFileRequestChunked(fileNameIn, Convert.ToUInt32(fileSize), timeOut, null, new CancellationTokenSource());
+            /*
 
             if (this.verbosity) { Console.WriteLine(" - sendFileRequest - "); }
             if (this.url == "") { throw new ArgumentException("Invalid URL"); }
@@ -746,6 +795,7 @@ namespace Stash
             apiParams.Add("api_signature", this.getSignature());
 
             HttpWebRequest requestToServer = (HttpWebRequest)WebRequest.Create(this.url);
+
             string boundaryString = "----" + genRandomString(24);
             requestToServer.Timeout = timeOut * 1000;
             requestToServer.AllowWriteStreamBuffering = false;
@@ -837,6 +887,7 @@ namespace Stash
                 Console.WriteLine("- sendFileRequest Complete - Result: " + retVal);
             }
             return retVal;
+            */
         }
 
         // Uploads a file to the server in chunks. While the functions are awaited, the chunks are being uploaded to the file synchronously.
