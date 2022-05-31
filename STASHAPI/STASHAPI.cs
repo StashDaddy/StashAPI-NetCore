@@ -1029,8 +1029,12 @@ namespace Stash
                         try
                         {
                             HttpResponseMessage response = await requestToServer.PostAsync(url, form);
-
+                            if (!response.IsSuccessStatusCode) { throw new Exception(response.ReasonPhrase); }
+                            // If code:200 not in response value, then throw exception with content
                             retVal = response.Content.ReadAsStringAsync().Result;
+                            if (!retVal.Contains("\"code\":200")) { throw new Exception(retVal); }
+                            //retVal = response.Content.ReadAsStringAsync().Result;
+
                             ulong fileLength = Convert.ToUInt64(fileStream.Length);
                             ulong processedBytes = (ulong)buffer.Length * (ulong)i;
                             ulong total = Convert.ToUInt64(fileLength - processedBytes);
