@@ -1497,6 +1497,10 @@ namespace Stash
                 {
                     this.validateCredParams(false, true, false, false);
                 }
+                else if (opIn == "getuserid")
+                {
+                    this.validateCredParams(false, true, true, false);
+                }
                 else if (opIn == "setperms")
                 {
                     this.validateSetPermParams();
@@ -2964,6 +2968,45 @@ namespace Stash
                     Console.WriteLine("- Error Occurred isValidUser, Code: " + retCode.ToString() + " Message: " + (msg != null ? msg.ToString() : "Not Available") + " Extended Message: " + (extMsg != null ? extMsg.ToString() : "Not Available"));
                 }
             }
+            return retVal;
+        }
+
+        /**
+          * Function returns the User ID for the given user making the request
+          * The API_ID and accountUsername parameters in the request must match the API_ID and username for the user
+          * @param Array, an associative array containing the source identifier, the values of which user account to check
+          * @return Array, the result / output of the operation
+         */
+        public Dictionary<string, object> getUserId(Dictionary<string, object> srcIdentifier, out int retCode, out ulong userId)
+        {
+            string apiResult = ""; retCode = 0; userId = 0;
+            Dictionary<string, object> retVal = null;
+
+            this.dParams = srcIdentifier;
+            this.url = this.BASE_API_URL + "api2/auth/getuserid";
+
+            if (!this.validateParams("getuserid")) { throw new ArgumentException("Invalid Input Parameters"); }
+            apiResult = this.SendRequest();
+
+            if (this.dParams != null) { this.dParams.Clear(); }
+
+            retCode = GetResponseCodeDict(apiResult, out retVal);
+
+            if (retCode != 200)
+            {
+                if (this.verbosity)
+                {
+                    GetError(retVal, out int code, out string msg, out string extMsg);
+                    Console.WriteLine("- Error Occurred getUserId, Code: " + retCode.ToString() + " Message: " + (msg != null ? msg.ToString() : "Not Available") + " Extended Message: " + (extMsg != null ? extMsg.ToString() : "Not Available"));
+                }
+            } else
+            {
+                if (retVal.TryGetValue("userId", out object objUId) && objUId != null)
+                {
+                    userId = Convert.ToUInt64(objUId.ToString());
+                }
+            }
+
             return retVal;
         }
 
