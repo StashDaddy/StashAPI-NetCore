@@ -912,7 +912,7 @@ namespace Stash
               .Select(s => s[random.Next(s.Length)]).ToArray());
             chunkedParams.Add("temp_name", temp_name);
 
-            if (uploadFile.Length < chunkSize)
+            if (uploadFile.Length <= chunkSize)
             {
                 chunkSize = Convert.ToInt32(uploadFile.Length);  // if the file is smaller than the chunk size, upload the file as one chunk
             }
@@ -1026,8 +1026,8 @@ namespace Stash
                         form.Add(new ByteArrayContent(strParamsBytes), "params");
                         form.Add(new ByteArrayContent(chunkedParamBytes), "chunkedParams");
 
-                        try
-                        {
+                        //try
+                        //{
                             HttpResponseMessage response = await requestToServer.PostAsync(url, form);
                             if (!response.IsSuccessStatusCode) { throw new Exception(response.ReasonPhrase); }
                             // If code:200 not in response value, then throw exception with content
@@ -1050,12 +1050,12 @@ namespace Stash
                             }
 
                             requestToServer.Dispose();
-                        }
-                        catch (Exception e)
-                        {
-                            Console.WriteLine("ERROR - There was an error sending the chunk request: " + e.Message);
-                            retVal = "false";
-                        }
+                        //}
+                        //catch (Exception e)
+                        //{
+                        //    Console.WriteLine("ERROR - There was an error sending the chunk request: " + e.Message);
+                        //    retVal = "false";
+                        //}
                         i++;
                     }
                 }
@@ -1063,7 +1063,8 @@ namespace Stash
             catch (Exception e)
             {
                 Console.WriteLine("ERROR - There was an error sending the chunk request: " + e.Message);
-                retVal = "false";
+                //retVal = "false";
+                retVal = e.Message;
             }
             finally
             {
@@ -1864,6 +1865,17 @@ namespace Stash
         // Uploads file to the user's Vault
         public Dictionary<string, object> putFile(string fileNameIn, Dictionary<string, object> srcIdentifier, int timeOut, out int retCode, out UInt64 fileId, out UInt64 fileAliasId)
         {
+            CancellationTokenSource cts = new CancellationTokenSource();
+            Action<ulong, ulong, string> callback = (fileSize, processedBytes, name) =>
+            {
+                // Empty
+            };
+
+            // Chunk size is arbitrary - if file is smaller than chunk size, it will send it all in one chunk
+            return this.putFileChunked(fileNameIn, srcIdentifier, 1000000, timeOut, callback, cts, out retCode, out fileId, out fileAliasId);
+
+
+/*
             string apiResult = "";
             retCode = 0;
             fileId = 0; fileAliasId = 0;
@@ -1959,6 +1971,7 @@ namespace Stash
             }
 
             return retVal;
+*/
         }
 
         // Uploads a file to the Vault Support system
