@@ -606,8 +606,8 @@ namespace Stash
 
             // Build payload
             payload = JsonSerializer.Serialize(apiParams);       // apiParams is already merged if need be in signature above
-            //byte[] payloadBytes = Encoding.UTF8.GetBytes(payload);
-           
+                                                                 //byte[] payloadBytes = Encoding.UTF8.GetBytes(payload);
+
             //objHWR.Method = WebRequestMethods.Http.Post;
             //objHWR.ContentType = "application/json";
             //objHWR.ContentLength = payloadBytes.Length;
@@ -765,7 +765,7 @@ namespace Stash
             {
                 Console.WriteLine("- sendFileRequest Complete - Result: " + retVal);
             }
-            
+
             return retVal;
 
             //string retVal = await this.SendFileRequestChunked(fileNameIn, Convert.ToUInt32(fileSize), timeOut, null, new CancellationTokenSource());
@@ -919,6 +919,7 @@ namespace Stash
 
             byte[] buffer = new byte[chunkSize];
             FileStream fileStream = null;
+            bool isCancelled = false;
             try
             {
                 fileStream = new FileStream(fileNameIn, FileMode.Open, FileAccess.Read,
@@ -974,14 +975,13 @@ namespace Stash
                 while ((bytesRead = fileStream.Read(buffer, 0, buffer.Length)) > 0)
                 {
                     //Check cancellation token. If the user clicks stop, the upload will be aborted.
-                    bool isCancelled = ct.IsCancellationRequested;
+                    isCancelled = ct.IsCancellationRequested;
                     if (isCancelled == true)
                     {
-                        break;
+                        throw new OperationCanceledException("Client Cancelled Upload");
                     }
                     else
                     {
-
                         double chunks = (double)fileStream.Length / (double)chunkSize;
                         var totalChunks = Math.Ceiling(chunks);
 
@@ -1011,7 +1011,7 @@ namespace Stash
                         apiParams.Add("api_timestamp", this.api_timestamp);
                         this.setSignature(apiParams);
                         apiParams.Add("api_signature", this.getSignature());
-                        
+
                         var apiParameters = JsonSerializer.Serialize(apiParams);
                         var chunkedParameters = JsonSerializer.Serialize(chunkedParams);
                         ASCIIEncoding ascii = new ASCIIEncoding();
@@ -1028,28 +1028,28 @@ namespace Stash
 
                         //try
                         //{
-                            HttpResponseMessage response = await requestToServer.PostAsync(url, form);
-                            if (!response.IsSuccessStatusCode) { throw new Exception(response.ReasonPhrase); }
-                            // If code:200 not in response value, then throw exception with content
-                            retVal = response.Content.ReadAsStringAsync().Result;
-                            if (!retVal.Contains("\"code\":200")) { throw new Exception(retVal); }
-                            //retVal = response.Content.ReadAsStringAsync().Result;
+                        HttpResponseMessage response = await requestToServer.PostAsync(url, form);
+                        if (!response.IsSuccessStatusCode) { throw new Exception(response.ReasonPhrase); }
+                        // If code:200 not in response value, then throw exception with content
+                        retVal = response.Content.ReadAsStringAsync().Result;
+                        if (!retVal.Contains("\"code\":200")) { throw new Exception(retVal); }
+                        //retVal = response.Content.ReadAsStringAsync().Result;
 
-                            ulong fileLength = Convert.ToUInt64(fileStream.Length);
-                            ulong processedBytes = (ulong)buffer.Length * (ulong)i;
-                            ulong total = Convert.ToUInt64(fileLength - processedBytes);
+                        ulong fileLength = Convert.ToUInt64(fileStream.Length);
+                        ulong processedBytes = (ulong)buffer.Length * (ulong)i;
+                        ulong total = Convert.ToUInt64(fileLength - processedBytes);
 
-                            if (i < totalChunks)
-                            {
-                                callback(fileLength, processedBytes, fileNameIn);
-                            }
+                        if (i < totalChunks)
+                        {
+                            callback(fileLength, processedBytes, fileNameIn);
+                        }
 
-                            if ((fileLength - processedBytes) < Convert.ToUInt64(chunkSize))
-                            {
-                                buffer = new byte[fileLength - processedBytes];
-                            }
+                        if ((fileLength - processedBytes) < Convert.ToUInt64(chunkSize))
+                        {
+                            buffer = new byte[fileLength - processedBytes];
+                        }
 
-                            requestToServer.Dispose();
+                        requestToServer.Dispose();
                         //}
                         //catch (Exception e)
                         //{
@@ -1059,11 +1059,29 @@ namespace Stash
                         i++;
                     }
                 }
+                if (isCancelled)
+                {
+                    throw new OperationCanceledException("Client Cancelled Upload");
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                Console.WriteLine("ERROR - Client Cancelled Upload");
+                retVal = JsonSerializer.Serialize(new Dictionary<string, object>()
+                {
+                    { "code", 499 },
+                    { "error", new Dictionary<string, object>()
+                        {
+                            { "errorCode", 499 },
+                            { "extendedErrorMessage", "Client Cancelled Upload" },
+                        }
+                    },
+                    { "message", "The upload request was cancelled by the client" },
+                });
             }
             catch (Exception e)
             {
                 Console.WriteLine("ERROR - There was an error sending the chunk request: " + e.Message);
-                //retVal = "false";
                 retVal = e.Message;
             }
             finally
@@ -1499,7 +1517,7 @@ namespace Stash
                 }
                 else if (opIn == "getuserid")
                 {
-                    this.validateCredParams(false, true, true, false);
+                    this.validateCredParams(false, true, false, false);
                 }
                 else if (opIn == "setperms")
                 {
@@ -2010,7 +2028,7 @@ namespace Stash
         }
 
         // Uploads file to the user's Vault using Chunks
-        public Dictionary<string, object> putFileChunked(string fileNameIn, Dictionary<string, object> srcIdentifier, int chunkSize, int timeOut, Action<ulong, ulong, string> callback, System.Threading.CancellationTokenSource ct, out int retCode, out UInt64 fileId, out UInt64 fileAliasId)
+        public Dictionary<string, object> putFileChunked(string fileNameIn, Dictionary<string, object> srcIdentifier, int chunkSize, int timeOut, Action<ulong, ulong, string> callback, System.Threading.CancellationTokenSource cts, out int retCode, out UInt64 fileId, out UInt64 fileAliasId)
         {
             string apiResult = "";
             retCode = 0;
@@ -2076,7 +2094,7 @@ namespace Stash
             this.url = this.BASE_API_URL + "api2/file/writechunked";
             if (!this.validateParams("write")) { throw new ArgumentException("Invalid Input Parameters"); }
 
-            apiResult = this.SendFileRequestChunked(fileNameIn, chunkSize, timeOut, callback, ct).Result;
+            apiResult = this.SendFileRequestChunked(fileNameIn, chunkSize, timeOut, callback, cts).Result;
             if (this.dParams != null) { this.dParams.Clear(); }
 
             retCode = GetResponseCodeDict(apiResult, out retVal);
@@ -3696,6 +3714,30 @@ namespace Stash
             }
 
             return result;
+        }
+
+        /**
+         * Calculates a SHA1 hash of a file
+         * See: https://stackoverflow.com/questions/1993903/how-do-i-do-a-sha1-file-checksum-in-c
+         */
+        public static string FileSha1Hash(string filePathIn)
+        {
+            StringBuilder formatted = new StringBuilder("");
+
+            using (FileStream fs = new FileStream(filePathIn, FileMode.Open))
+            using (BufferedStream bs = new BufferedStream(fs))
+            {
+                using (SHA1 sha1 = SHA1.Create())
+                {
+                    byte[] hash = sha1.ComputeHash(bs);
+                    formatted = new StringBuilder(2 * hash.Length);
+                    foreach (byte b in hash)
+                    {
+                        formatted.AppendFormat("{0:X2}", b);
+                    }
+                }
+            }
+            return formatted.ToString();
         }
     }
 
