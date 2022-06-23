@@ -33,7 +33,7 @@ namespace Stash
         public const int STASHAPI_ID_LENGTH = 32;        // api_id String length
         public const int STASHAPI_PW_LENGTH = 32;        // API_PW String length (minimum)
         public const int STASHAPI_SIG_LENGTH = 32;       // API_SIGNATURE String length (minimum)
-        public const int STASHAPI_FILE_BUFFER_SIZE = 1024;  // Input / Output buffer for reading / writing files
+        public const int STASHAPI_FILE_BUFFER_SIZE = 65536;  // Input / Output buffer for reading / writing files
         public const string BASE_VAULT_FOLDER = "My Home";
         public const string BASE_URL = "https://www.stage.stashbusiness.com/";      // This is the URL to send requests to, can be overrided by BASE_API_URL in the constructor
         public const string ENC_ALG = "aes-256-cbc";        // Encryption algorithm for use in encryptString & decryptString(), encryptFile() & decryptFile(), uses an IV of 16 bytes
@@ -634,9 +634,10 @@ namespace Stash
         }
 
         // Downloads a file from the Vault and stores it in _fileNameIn_
-        public string sendDownloadRequest(string fileNameIn, int timeOut)
+        public string sendDownloadRequest(string fileNameIn, int timeOut, Action<ulong, ulong, string> callback, System.Threading.CancellationTokenSource cts, out int retCode)
         {
-            string payload = "";
+            string payload = ""; 
+            retCode = 0;
 
             if (this.verbosity) { Console.WriteLine(" - sendDownloadRequest - "); }
             if (this.url == "") { throw new ArgumentException("Invalid URL"); }
@@ -674,27 +675,23 @@ namespace Stash
                 //objHWR.ContentLength = payloadBytes.LongLength;
                 //objHWR.Timeout = timeOut * 1000;
 
-                var t = Task.Run(() => PostURIasStream(this.url, payload, timeOut, new CancellationToken()));
+                var t = Task.Run(() => PostURIasStream(this.url, payload, timeOut, cts.Token));
                 t.Wait();
-                sendStream = t.Result;
-                //retVal = t.Result;
+                if (cts.IsCancellationRequested) { throw new Exception("Client Cancelled Download");  }
 
-                //sendStream = objHWR.GetRequestStream();
-                //sendStream.Write(payloadBytes, 0, payloadBytes.Length);
-                //sendStream.Close();
-
-                //objResponse = objHWR.GetResponse();
-                //sendStream = objResponse.GetResponseStream();
+                sendStream = t.Result;                
 
                 int bufferSize = STASHAPI_FILE_BUFFER_SIZE;
                 byte[] buffer = new byte[bufferSize];
                 int bytesRead = sendStream.Read(buffer, 0, buffer.Length);
+                ulong totalBytesRead = Convert.ToUInt64(bytesRead);
+                ulong totalBytes = Convert.ToUInt64(sendStream.Length);
 
                 // Examine buffer for error JSON and if found, skip the download and return error
                 // If any error occurs during this error check, just dump the output to the file anyway
                 try
                 {
-                    string tStr = Encoding.ASCII.GetString(buffer, 0, 200);
+                    string tStr = Encoding.ASCII.GetString(buffer, 0, 1000);
 
                     int idx = tStr.IndexOf('\0');
                     if (idx >= 1)
@@ -703,9 +700,9 @@ namespace Stash
                         apiError apiErr = JsonSerializer.Deserialize<apiError>(tStr);
                         if (apiErr.code >= 400 && apiErr.code <= 500)
                         {   // The value returned was an API error JSON string, not the file content, return the error JSON
+                            retCode = apiErr.code;
                             return tStr;
                         }
-
                     }
                 }
                 catch (Exception ex)
@@ -713,24 +710,38 @@ namespace Stash
                     // Do nothing, assume the error check failed and its a valid file
                     string msg = ex.Message;
                 }
-
+                
                 fileStream = new System.IO.FileStream(fileNameIn, System.IO.FileMode.Create, System.IO.FileAccess.Write);
                 while (bytesRead != 0)
                 {
+                    if (cts != null && cts.IsCancellationRequested)
+                    {
+                        throw new OperationCanceledException("Client Cancelled Download");
+                    }
+
                     fileStream.Write(buffer, 0, bytesRead);
                     bytesRead = sendStream.Read(buffer, 0, buffer.Length);
+                    totalBytesRead += Convert.ToUInt64(bytesRead);
+
+                    callback?.Invoke(totalBytes, totalBytesRead, fileNameIn);       // Trigger callback if defined
                 }
+                retCode = 200;
                 return "1";
+            }
+            catch (OperationCanceledException ex)
+            {
+                retCode = 499;
+                return ex.Message;
             }
             catch (Exception ex)
             {
+                retCode = 500;
                 return ex.Message;
             }
             finally
             {
                 if (fileStream != null) { fileStream.Close(); }
                 if (sendStream != null) { sendStream.Close(); }
-                //if (objResponse != null) { objResponse.Close(); }
             }
         }
 
@@ -892,7 +903,7 @@ namespace Stash
 
         // Uploads a file to the server in chunks. While the functions are awaited, the chunks are being uploaded to the file synchronously.
         //TODO: Update function to upload chunks asynchronously
-        public async Task<string> SendFileRequestChunked(string fileNameIn, int chunkSize, int timeOut, Action<ulong, ulong, string> callback, System.Threading.CancellationTokenSource ct)
+        public async Task<string> SendFileRequestChunked(string fileNameIn, int chunkSize, int timeOut, Action<ulong, ulong, string> callback, System.Threading.CancellationTokenSource cts)
         {
             string retVal = "";
 
@@ -975,7 +986,7 @@ namespace Stash
                 while ((bytesRead = fileStream.Read(buffer, 0, buffer.Length)) > 0)
                 {
                     //Check cancellation token. If the user clicks stop, the upload will be aborted.
-                    isCancelled = ct.IsCancellationRequested;
+                    isCancelled = cts.IsCancellationRequested;
                     if (isCancelled == true)
                     {
                         throw new OperationCanceledException("Client Cancelled Upload");
@@ -1851,7 +1862,7 @@ namespace Stash
         // STASH API HELPER FUNCTIONS
         // *********************************************************************************************
         // Downloads a file from the user's vault
-        public string getFile(Dictionary<string, object> srcIdentifier, string fileNameOut, int timeOut, out int retCode)
+        public string getFile(Dictionary<string, object> srcIdentifier, string fileNameOut, int timeOut, Action<ulong, ulong, string> callback, System.Threading.CancellationTokenSource cts, out int retCode)
         {
             string apiResult = "";
             retCode = 0;
@@ -1869,7 +1880,7 @@ namespace Stash
 
             if (!this.validateParams("read")) { throw new ArgumentException("Invalid Input Parameters"); }
 
-            apiResult = this.sendDownloadRequest(fileNameOut, timeOut);
+            apiResult = this.sendDownloadRequest(fileNameOut, timeOut, callback, cts, out retCode);
             if (this.dParams != null) { this.dParams.Clear(); }
 
             if (apiResult == "1")
@@ -3158,7 +3169,7 @@ namespace Stash
 
             if (!this.validateParams("readversion")) { throw new ArgumentException("Invalid Input Parameters"); }
 
-            apiResult = this.sendDownloadRequest(fileNameOut, timeOut);
+            apiResult = this.sendDownloadRequest(fileNameOut, timeOut, null, null, out retCode);
             if (this.dParams != null) { this.dParams.Clear(); }
 
             if (apiResult == "1")
@@ -3421,7 +3432,7 @@ namespace Stash
             // Params are validated the same for retrieve and polling
             if (!this.validateParams("weberaseretrieve")) { throw new ArgumentException("Invalid Input Parameters"); }
 
-            apiResult = this.sendDownloadRequest(fileNameOut, timeOut);
+            apiResult = this.sendDownloadRequest(fileNameOut, timeOut, null, null, out retCode);
             if (this.dParams != null) { this.dParams.Clear(); }
 
             if (apiResult == "1")
@@ -3737,7 +3748,27 @@ namespace Stash
                     }
                 }
             }
-            return formatted.ToString();
+            return formatted.ToString().ToLower();
+        }
+
+        public static string FileSha256Hash(string filePathIn)
+        {
+            StringBuilder formatted = new StringBuilder("");
+
+            using (FileStream fs = new FileStream(filePathIn, FileMode.Open))
+            using (BufferedStream bs = new BufferedStream(fs))
+            {
+                using (SHA256 sha256 = SHA256.Create())
+                {
+                    byte[] hash = sha256.ComputeHash(bs);
+                    formatted = new StringBuilder(2 * hash.Length);
+                    foreach (byte b in hash)
+                    {
+                        formatted.AppendFormat("{0:X2}", b);
+                    }
+                }
+            }
+            return formatted.ToString().ToLower();
         }
     }
 
