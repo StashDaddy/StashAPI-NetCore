@@ -902,7 +902,6 @@ namespace Stash
         }
 
         // Uploads a file to the server in chunks. While the functions are awaited, the chunks are being uploaded to the file synchronously.
-        //TODO: Update function to upload chunks asynchronously
         public async Task<string> SendFileRequestChunked(string fileNameIn, int chunkSize, int timeOut, Action<ulong, ulong, string> callback, System.Threading.CancellationTokenSource cts)
         {
             string retVal = "";
@@ -930,7 +929,6 @@ namespace Stash
 
             byte[] buffer = new byte[chunkSize];
             FileStream fileStream = null;
-            bool isCancelled = false;
             try
             {
                 fileStream = new FileStream(fileNameIn, FileMode.Open, FileAccess.Read,
@@ -986,8 +984,7 @@ namespace Stash
                 while ((bytesRead = fileStream.Read(buffer, 0, buffer.Length)) > 0)
                 {
                     //Check cancellation token. If the user clicks stop, the upload will be aborted.
-                    isCancelled = cts.IsCancellationRequested;
-                    if (isCancelled == true)
+                    if (cts != null && cts.IsCancellationRequested)
                     {
                         throw new OperationCanceledException("Client Cancelled Upload");
                     }
@@ -1052,7 +1049,7 @@ namespace Stash
 
                         if (i < totalChunks)
                         {
-                            callback(fileLength, processedBytes, fileNameIn);
+                            callback?.Invoke(fileLength, processedBytes, fileNameIn);
                         }
 
                         if ((fileLength - processedBytes) < Convert.ToUInt64(chunkSize))
@@ -1070,10 +1067,10 @@ namespace Stash
                         i++;
                     }
                 }
-                if (isCancelled)
-                {
-                    throw new OperationCanceledException("Client Cancelled Upload");
-                }
+                //if (isCancelled)
+                //{
+                //    throw new OperationCanceledException("Client Cancelled Upload");
+                //}
             }
             catch (OperationCanceledException)
             {
@@ -3696,22 +3693,23 @@ namespace Stash
             // Copy all keys in the dictionary, but rename "destFileName", "destFolderNames", "destFolderId", "destFilePath"
             Dictionary<string, object> result = new Dictionary<string, object>();
 
+            // Look for dest parameters or source parameters so the conversion works for both destination params, and inadvertent source params specified as destination params
             foreach (KeyValuePair<string, object> keyValue in destDictIn)
             {
-                if (keyValue.Key == "destFileName")
+                if (keyValue.Key == "destFileName" || keyValue.Key == "fileName")
                 {
                     result.Add("fileName", keyValue.Value.ToString());
                 }
-                else if (keyValue.Key == "destFolderNames")
+                else if (keyValue.Key == "destFolderNames" || keyValue.Key == "folderNames")
                 {
                     result.Add("folderNames", keyValue.Value);
                     // To Do - unknow deep or shallow copy of a string array
                 }
-                else if (keyValue.Key == "destFolderId")
+                else if (keyValue.Key == "destFolderId" || keyValue.Key == "folderId")
                 {
                     result.Add("folderId", keyValue.Value.ToString());
                 }
-                else if (keyValue.Key == "destFilePath")
+                else if (keyValue.Key == "destFilePath" || keyValue.Key == "filePath")
                 {
                     result.Add("filePath", keyValue.Value.ToString());
                 }
