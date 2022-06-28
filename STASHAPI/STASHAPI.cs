@@ -40,7 +40,7 @@ namespace Stash
         public const int STASH_ENC_BLOCKSIZE = 1024;        // The size of the data block to encrypt; must match the blocksize used in the decryption platform - IV.length
         public const int STASH_DEC_BLOCKSIZE = 1040;        // The size of the data block to decrypt; must be STASH_ENC_BLOCKSIZE + IV.length; must match the blocksize used in the encryption platform + IV.length
 
-        private static readonly HttpClient client = new HttpClient();
+        private static HttpClient client;
 
         private string _api_id;             // The API_ID For your account
         public string api_id
@@ -560,6 +560,7 @@ namespace Stash
         */
         public async Task<string> PostURI(string uri, string payload)
         {
+            client = new HttpClient();
             HttpResponseMessage response = await client.PostAsync(uri, new StringContent(payload, Encoding.UTF8, "application/json"));
             return await response.Content.ReadAsStringAsync();
         }
@@ -570,8 +571,15 @@ namespace Stash
          */
         public async Task<Stream> PostURIasStream(string uri, string payload, double timeOutIn, CancellationToken ct)
         {
+            // ToDo - fix to get over 2GB response buffer limit?
+            //aronccs Create a HttpRequestMessage, set the method to POST and pass it to SendAsync with the appropriate HttpCompletionOption
+            // See https://stackoverflow.com/questions/18720435/httpclient-buffer-size-limit-exceeded
+            client = new HttpClient();
             client.Timeout = TimeSpan.FromSeconds(timeOutIn);
-            HttpResponseMessage response = await client.PostAsync(uri, new StringContent(payload, Encoding.UTF8, "application/json"), ct);
+            HttpRequestMessage hrm = new HttpRequestMessage(HttpMethod.Post, uri);
+            hrm.Content = new StringContent(payload, Encoding.UTF8, "application/json");
+            HttpResponseMessage response = await client.SendAsync(hrm, HttpCompletionOption.ResponseHeadersRead, ct);
+            //HttpResponseMessage response = await client.PostAsync(uri, new StringContent(payload, Encoding.UTF8, "application/json"), ct);
             return response.Content.ReadAsStream(ct);
         }
 
@@ -634,7 +642,7 @@ namespace Stash
         }
 
         // Downloads a file from the Vault and stores it in _fileNameIn_
-        public string sendDownloadRequest(string fileNameIn, int timeOut, Action<ulong, ulong, string> callback, System.Threading.CancellationTokenSource cts, out int retCode)
+        public string sendDownloadRequest(string fileNameIn, ulong fileSize, int timeOut, Action<ulong, ulong, string> callback, System.Threading.CancellationTokenSource cts, out int retCode)
         {
             string payload = ""; 
             retCode = 0;
@@ -669,12 +677,6 @@ namespace Stash
                 // Build payload
                 payload = JsonSerializer.Serialize(apiParams);       // apiParams is already merged if need be in signature above
                                                                      //byte[] payloadBytes = Encoding.UTF8.GetBytes(payload);
-
-                //objHWR.Method = WebRequestMethods.Http.Post;
-                //objHWR.ContentType = "application/json";
-                //objHWR.ContentLength = payloadBytes.LongLength;
-                //objHWR.Timeout = timeOut * 1000;
-
                 var t = Task.Run(() => PostURIasStream(this.url, payload, timeOut, cts.Token));
                 t.Wait();
                 if (cts.IsCancellationRequested) { throw new Exception("Client Cancelled Download");  }
@@ -685,7 +687,8 @@ namespace Stash
                 byte[] buffer = new byte[bufferSize];
                 int bytesRead = sendStream.Read(buffer, 0, buffer.Length);
                 ulong totalBytesRead = Convert.ToUInt64(bytesRead);
-                ulong totalBytes = Convert.ToUInt64(sendStream.Length);
+                ulong totalBytes = fileSize;
+                //ulong totalBytes = 1;
 
                 // Examine buffer for error JSON and if found, skip the download and return error
                 // If any error occurs during this error check, just dump the output to the file anyway
@@ -902,7 +905,7 @@ namespace Stash
         }
 
         // Uploads a file to the server in chunks. While the functions are awaited, the chunks are being uploaded to the file synchronously.
-        public async Task<string> SendFileRequestChunked(string fileNameIn, int chunkSize, int timeOut, Action<ulong, ulong, string> callback, System.Threading.CancellationTokenSource cts)
+        public async Task<string> SendFileRequestChunked(string fileNameIn, int chunkSize, int timeOutSeconds, Action<ulong, ulong, string> callback, System.Threading.CancellationTokenSource cts)
         {
             string retVal = "";
 
@@ -1028,7 +1031,7 @@ namespace Stash
                         byte[] strParamsBytes = ascii.GetBytes(apiParameters);
                         byte[] chunkedParamBytes = ascii.GetBytes(chunkedParameters);
                         HttpClient requestToServer = new HttpClient();
-                        requestToServer.Timeout = new TimeSpan(0, 0, timeOut);
+                        requestToServer.Timeout = new TimeSpan(0, 0, timeOutSeconds);
                         MultipartFormDataContent form = new MultipartFormDataContent();
                         form.Add(data, "file", fileNameIn.Substring(pos, fileNameIn.Length - pos));
                         form.Add(new ByteArrayContent(strParamsBytes), "params");
@@ -1859,7 +1862,7 @@ namespace Stash
         // STASH API HELPER FUNCTIONS
         // *********************************************************************************************
         // Downloads a file from the user's vault
-        public string getFile(Dictionary<string, object> srcIdentifier, string fileNameOut, int timeOut, Action<ulong, ulong, string> callback, System.Threading.CancellationTokenSource cts, out int retCode)
+        public string getFile(Dictionary<string, object> srcIdentifier, string fileNameOut, ulong fileSize, int timeOut, Action<ulong, ulong, string> callback, System.Threading.CancellationTokenSource cts, out int retCode)
         {
             string apiResult = "";
             retCode = 0;
@@ -1877,7 +1880,7 @@ namespace Stash
 
             if (!this.validateParams("read")) { throw new ArgumentException("Invalid Input Parameters"); }
 
-            apiResult = this.sendDownloadRequest(fileNameOut, timeOut, callback, cts, out retCode);
+            apiResult = this.sendDownloadRequest(fileNameOut, fileSize, timeOut, callback, cts, out retCode);
             if (this.dParams != null) { this.dParams.Clear(); }
 
             if (apiResult == "1")
@@ -2121,6 +2124,10 @@ namespace Stash
                 {
                     fileId = Convert.ToUInt64(fileIdObj.ToString());
                 }
+            } else if (retCode == -1)
+            {
+                // Custom error message is in apiResult
+                throw new Exception(apiResult);
             }
             else
             {
@@ -3166,7 +3173,7 @@ namespace Stash
 
             if (!this.validateParams("readversion")) { throw new ArgumentException("Invalid Input Parameters"); }
 
-            apiResult = this.sendDownloadRequest(fileNameOut, timeOut, null, null, out retCode);
+            apiResult = this.sendDownloadRequest(fileNameOut, 0, timeOut, null, null, out retCode);
             if (this.dParams != null) { this.dParams.Clear(); }
 
             if (apiResult == "1")
@@ -3429,7 +3436,7 @@ namespace Stash
             // Params are validated the same for retrieve and polling
             if (!this.validateParams("weberaseretrieve")) { throw new ArgumentException("Invalid Input Parameters"); }
 
-            apiResult = this.sendDownloadRequest(fileNameOut, timeOut, null, null, out retCode);
+            apiResult = this.sendDownloadRequest(fileNameOut, 0, timeOut, null, null, out retCode);
             if (this.dParams != null) { this.dParams.Clear(); }
 
             if (apiResult == "1")
