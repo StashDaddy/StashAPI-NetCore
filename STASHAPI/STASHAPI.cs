@@ -29,7 +29,7 @@ namespace Stash
 {
     public class StashAPI : Object
     {
-        public const string FILE_VERSION = "1.0.0";
+        public const string FILE_VERSION = "1.0.1";
         public const string STASHAPI_VERSION = "1.0";       // API Version
         public const int STASHAPI_ID_LENGTH = 32;        // api_id String length
         public const int STASHAPI_PW_LENGTH = 32;        // API_PW String length (minimum)
@@ -802,6 +802,7 @@ namespace Stash
 
                 fileStream = new FileStream(fileNameIn, FileMode.Open, FileAccess.Read,
                 FileShare.Read, bufferSize: chunkSize, useAsync: true);
+                bool fileDone = false;          // Flag to track if file is being resumed from the point its been completely uploaded already (e.g. there was an error with encrypt, slice or sending to storage)
 
                 // If resumeUpload flag set, resumeToken set, and able to seek on the FileStream - try a resume
                 if (resumeUpload && resumeToken != "" && fileStream.CanSeek)
@@ -822,6 +823,7 @@ namespace Stash
                         {
                             fileStream.Seek(Convert.ToInt64(resumeIndex), SeekOrigin.Begin);
                             i = (int)(resumeIndex / Convert.ToUInt64(chunkSize)) + 1;
+                            if (Convert.ToUInt64(fileStream.Length) == resumeIndex) { fileDone = true; }
                         } catch (Exception)
                         {
                             // Something failed with seek - reset it to 0 and start upload over again
@@ -869,7 +871,7 @@ namespace Stash
                 apiParams.Add("api_signature", this.getSignature());
 
                 //Begin reading the file and send each chunk to the server.
-                while ((bytesRead = fileStream.Read(buffer, 0, buffer.Length)) > 0)
+                while ((bytesRead = fileStream.Read(buffer, 0, buffer.Length)) > 0 || fileDone)
                 {
                     //Check cancellation token. If the user clicks stop, the upload will be aborted.
                     if (cts != null && cts.IsCancellationRequested)
@@ -896,6 +898,10 @@ namespace Stash
                             chunkedParams.Add("chunkedUpload", "true");
                         }
                         chunkedParams.Add("progress", i + "/" + totalChunks);
+                        if (fileDone)
+                        {
+                            chunkedParams.Add("skipappend", "1");
+                        }
 
                         int pos = fileNameIn.LastIndexOf("\\") + 1;
 
@@ -911,14 +917,27 @@ namespace Stash
                         var apiParameters = JsonSerializer.Serialize(apiParams);
                         var chunkedParameters = JsonSerializer.Serialize(chunkedParams);
                         ASCIIEncoding ascii = new ASCIIEncoding();
-                        ByteArrayContent data = new ByteArrayContent(buffer);
+
+                        ByteArrayContent data = null;
+                        if (fileDone)
+                        {
+                            // If file already uploaded, send a single, empty byte so the backend generates a $_FILES array correctly
+                            // This is combined with the 'skipappend'=1 parameter to cause the backend to NOT append the single empty byte to the existing file (which is fully uploaded already)
+                            data = new ByteArrayContent(new byte[0]);
+                        }
+                        else
+                        {
+                            data = new ByteArrayContent(buffer);
+                        }
                         data.Headers.ContentType = System.Net.Http.Headers.MediaTypeHeaderValue.Parse("multipart/form-data");
+
                         byte[] strParamsBytes = ascii.GetBytes(apiParameters);
                         byte[] chunkedParamBytes = ascii.GetBytes(chunkedParameters);
                         HttpClient requestToServer = new HttpClient();
                         requestToServer.Timeout = new TimeSpan(0, 0, timeOutSeconds);
                         MultipartFormDataContent form = new MultipartFormDataContent();
                         form.Add(data, "file", fileNameIn.Substring(pos, fileNameIn.Length - pos));
+                        
                         form.Add(new ByteArrayContent(strParamsBytes), "params");
                         form.Add(new ByteArrayContent(chunkedParamBytes), "chunkedParams");
 
@@ -945,6 +964,7 @@ namespace Stash
                         requestToServer.Dispose();
                         
                         i++;
+                        fileDone = false;       // Reset flag to fall out of while loop if this was just an iteration to trigger the encrypt/slice/send because file had already been completely uploaded
                     }
                 }
             }
