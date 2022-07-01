@@ -29,11 +29,16 @@ namespace Stash
 {
     public class StashAPI : Object
     {
+        public const string FILE_VERSION = "1.0.0";
         public const string STASHAPI_VERSION = "1.0";       // API Version
         public const int STASHAPI_ID_LENGTH = 32;        // api_id String length
         public const int STASHAPI_PW_LENGTH = 32;        // API_PW String length (minimum)
         public const int STASHAPI_SIG_LENGTH = 32;       // API_SIGNATURE String length (minimum)
-        public const int STASHAPI_FILE_BUFFER_SIZE = 65536;  // Input / Output buffer for reading / writing files
+        public const int STASHAPI_FILE_BUFFER_SIZE = 65536;        // 65k, Input / Output buffer for reading / writing files
+        public const int STASHAPI_LARGEFILE_SIZE = 10485760;       // 10MB, Files larger than this value will use the STASHAPI_LARGEFILE_BUFFER_SIZE for transfers
+        public const int STASHAPI_LARGEFILE_BUFFER_SIZE = 524288;  // 512k, Files larger than LARGEFILE_SIZE use this buffer size
+        public const int STASHAPI_XLARGEFILE_SIZE = 1073741824;         // 1GB, Files larger than this value will use the STASHAPI_XLARGEFILE_BUFFER_SIZE for transfer
+        public const int STASHAPI_XLARGEFILE_BUFFER_SIZE = 10485760;    // 10MB, Files larger than XLARGEFILE_SIZE will use this buffer size
         public const string BASE_VAULT_FOLDER = "My Home";
         public const string BASE_URL = "https://www.stage.stashbusiness.com/";      // This is the URL to send requests to, can be overrided by BASE_API_URL in the constructor
         public const string ENC_ALG = "aes-256-cbc";        // Encryption algorithm for use in encryptString & decryptString(), encryptFile() & decryptFile(), uses an IV of 16 bytes
@@ -684,11 +689,18 @@ namespace Stash
                 sendStream = t.Result;                
 
                 int bufferSize = STASHAPI_FILE_BUFFER_SIZE;
+                if (fileSize >= STASHAPI_XLARGEFILE_SIZE)
+                {
+                    bufferSize = STASHAPI_XLARGEFILE_BUFFER_SIZE;
+                } else if (fileSize >= STASHAPI_LARGEFILE_SIZE)
+                {
+                    bufferSize = STASHAPI_LARGEFILE_SIZE;
+                }
+
                 byte[] buffer = new byte[bufferSize];
                 int bytesRead = sendStream.Read(buffer, 0, buffer.Length);
                 ulong totalBytesRead = Convert.ToUInt64(bytesRead);
                 ulong totalBytes = fileSize;
-                //ulong totalBytes = 1;
 
                 // Examine buffer for error JSON and if found, skip the download and return error
                 // If any error occurs during this error check, just dump the output to the file anyway
@@ -758,20 +770,11 @@ namespace Stash
             // Placeholder / empty callback - this is empty because this is intended for single, small file uploads, anything else should use SendFileRequestChunked / PutFileChunked
             Action<ulong, ulong, string> callback = (fileSize, processedBytes, name) =>
             {
-                //double pct = 0;
-                //if (fileSize > 0)
-                //{
-                //    pct = Math.Round((double)processedBytes / (double)fileSize * 100);
-                //}
-                //if (pct < 0) { pct = 0; }
-                //else if (pct > 100) { pct = 100; }
-                //string strPct = String.Concat(pct, "%");
-
-                //statusUpdate.Turn("Uploading File... ", " " + strPct + " (" + processedBytes + "/" + fileSize + ")", "Uploading File", "");
+                // nothing
             };
 
-            // CancellationTokenSource
-            var t = Task.Run(() => this.SendFileRequestChunked(fileNameIn, Convert.ToInt32(fileSize), timeOut, callback, new CancellationTokenSource()));
+            string resumeToken = "";            // Ignored in SendFileRequest()/ putFile() - only used in putFileChunked()
+            var t = Task.Run(() => this.SendFileRequestChunked(fileNameIn, Convert.ToInt32(fileSize), timeOut, callback, new CancellationTokenSource(), resumeToken, false));
             t.Wait();
             retVal = t.Result;
 
@@ -780,164 +783,72 @@ namespace Stash
                 Console.WriteLine("- sendFileRequest Complete - Result: " + retVal);
             }
 
-            return retVal;
-
-            //string retVal = await this.SendFileRequestChunked(fileNameIn, Convert.ToUInt32(fileSize), timeOut, null, new CancellationTokenSource());
-            /*
-
-            if (this.verbosity) { Console.WriteLine(" - sendFileRequest - "); }
-            if (this.url == "") { throw new ArgumentException("Invalid URL"); }
-            if (fileNameIn == "" || !System.IO.File.Exists(fileNameIn)) { throw new ArgumentException("A Filename Must Be Specified, or File Does Not Exist"); }
-
-            // Build params list containing needed API fields
-            Dictionary<string, object> apiParams = new Dictionary<string, object>();
-            apiParams.Add("url", this.url);
-            apiParams.Add("api_version", this.api_version);
-            apiParams.Add("api_id", this.api_id);
-            this.api_timestamp = 0;        // Set to current timestamp
-            apiParams.Add("api_timestamp", this.api_timestamp);
-
-            // Sign Request
-            if ((this.dParams != null) && this.dParams.Count > 0)
-            {
-                this.setSignature(Dictionaries_merge(apiParams, this.dParams));
-            }
-            else
-            {
-                this.setSignature(apiParams);
-            }
-            apiParams.Add("api_signature", this.getSignature());
-
-            HttpWebRequest requestToServer = (HttpWebRequest)WebRequest.Create(this.url);
-
-            string boundaryString = "----" + genRandomString(24);
-            requestToServer.Timeout = timeOut * 1000;
-            requestToServer.AllowWriteStreamBuffering = false;
-            requestToServer.Method = WebRequestMethods.Http.Post;
-            requestToServer.ContentType = "multipart/form-data; boundary=" + boundaryString;
-            requestToServer.KeepAlive = false;
-
-            ASCIIEncoding ascii = new ASCIIEncoding();
-            string boundaryStringLine = Environment.NewLine + "--" + boundaryString + Environment.NewLine;
-            byte[] boundaryStringLineBytes = ascii.GetBytes(boundaryStringLine);
-
-            string lastBoundaryStringLine = Environment.NewLine + "--" + boundaryString + "--" + Environment.NewLine;
-            byte[] lastBoundaryStringLineBytes = ascii.GetBytes(lastBoundaryStringLine);
-
-            string strVals = "";
-            foreach (KeyValuePair<string, object> kvp in apiParams)
-            {
-                //if (IsArray(kvp.Value))
-                if (kvp.Value.GetType() == typeof(string[]))
-                {
-                    strVals = strVals + String.Format("\"{0}\":[", kvp.Key.ToString());
-                    foreach (string strItem in (string[])kvp.Value)
-                    {
-                        strVals = strVals + String.Format("\"{0}\",", strItem);
-                    }
-                    strVals = strVals.Substring(0, strVals.Length - 1);     // Strip off final comma
-                    strVals = strVals + "],";
-                }
-                else
-                {
-                    strVals = strVals + String.Format("\"{0}\":\"{1}\",", kvp.Key.ToString(), kvp.Value.ToString());
-                }
-            }
-
-            if (strVals.Substring(strVals.Length - 1, 1) == ",")       // If last character is a comma
-            {
-                strVals = strVals.Substring(0, strVals.Length - 1);     // Strip off final comma
-            }
-            string strParams = String.Format("Content-Disposition: form-data; name=\"{0}\"{2}{2}{{{1}}}", "params", strVals, Environment.NewLine);
-            byte[] strParamsBytes = ascii.GetBytes(strParams);
-            if (this.verbosity) { Console.WriteLine("strParams: " + strParams); }
-
-            System.IO.FileInfo uploadFile = new System.IO.FileInfo(fileNameIn);
-            string strContentType = "application/unknown";      // Receiver will handle the file type, doesn't matter what we put here
-            string strFile = String.Format("Content-Disposition: form-data; name=\"file\"; filename=\"{1}\"{3}Content-Type: {2}{3}{3}", uploadFile.Name, uploadFile.Name, strContentType, Environment.NewLine);
-            byte[] strFileBytes = ascii.GetBytes(strFile);
-            if (this.verbosity) { Console.WriteLine("strFile: " + strFile); }
-
-            // Calculate the total size of the HTTP request
-            long totalRequestBodySize = boundaryStringLineBytes.Length * 2 + lastBoundaryStringLineBytes.Length + strParamsBytes.Length + strFileBytes.Length + uploadFile.Length;
-            requestToServer.ContentLength = totalRequestBodySize;
-
-            System.IO.Stream s = requestToServer.GetRequestStream();
-            s.Write(boundaryStringLineBytes, 0, boundaryStringLineBytes.Length);
-            s.Write(strParamsBytes, 0, strParamsBytes.Length);
-
-            s.Write(boundaryStringLineBytes, 0, boundaryStringLineBytes.Length);
-            s.Write(strFileBytes, 0, strFileBytes.Length);
-
-            System.IO.FileStream fileStream = new System.IO.FileStream(fileNameIn, System.IO.FileMode.Open, System.IO.FileAccess.Read);
-            byte[] buffer = new byte[32768];
-            int loopCounter = 0;
-            int bytesRead = fileStream.Read(buffer, 0, buffer.Length);
-            while (bytesRead != 0)
-            {
-                s.Write(buffer, 0, bytesRead);
-                s.Flush();
-                loopCounter++;
-                if ((loopCounter % 10) == 0)
-                {
-                    s.Flush();
-                }
-                bytesRead = fileStream.Read(buffer, 0, buffer.Length);
-            }
-            fileStream.Close();
-
-            s.Write(lastBoundaryStringLineBytes, 0, lastBoundaryStringLineBytes.Length);
-
-            WebResponse objResponse = requestToServer.GetResponse();
-            System.IO.Stream responseStream = objResponse.GetResponseStream();
-            System.IO.StreamReader reader = new System.IO.StreamReader(responseStream);
-            retVal = reader.ReadToEnd();
-            reader.Close();
-            responseStream.Close();
-            objResponse.Close();
-
-            if (this.verbosity)
-            {
-                Console.WriteLine("- sendFileRequest Complete - Result: " + retVal);
-            }
-            return retVal;
-            */
+            return retVal;            
         }
 
         // Uploads a file to the server in chunks. While the functions are awaited, the chunks are being uploaded to the file synchronously.
-        public async Task<string> SendFileRequestChunked(string fileNameIn, int chunkSize, int timeOutSeconds, Action<ulong, ulong, string> callback, System.Threading.CancellationTokenSource cts)
+        public async Task<string> SendFileRequestChunked(string fileNameIn, int chunkSize, int timeOutSeconds, Action<ulong, ulong, string> callback, System.Threading.CancellationTokenSource cts, string resumeToken, bool resumeUpload)
         {
             string retVal = "";
 
             if (this.verbosity) { Console.WriteLine(" - sendFileRequest - "); }
             if (this.url == "") { throw new ArgumentException("Invalid URL"); }
             if (fileNameIn == "" || !System.IO.File.Exists(fileNameIn)) { throw new ArgumentException("A Filename Must Be Specified, or File Does Not Exist"); }
-            this.url = this.BASE_API_URL + "api2/file/writechunked";
-            // Build params list containing needed API fields
-
-            System.IO.FileInfo uploadFile = new System.IO.FileInfo(fileNameIn);
-            Dictionary<string, string> chunkedParams = new Dictionary<string, string>();
-
-            //Generate a temp name for the server to store the file. This prevents files of the same name from confilicting with each other.
-            const string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-            Random random = new Random();
-            string temp_name = new string(Enumerable.Repeat(chars, 24)
-              .Select(s => s[random.Next(s.Length)]).ToArray());
-            chunkedParams.Add("temp_name", temp_name);
-
-            if (uploadFile.Length <= chunkSize)
-            {
-                chunkSize = Convert.ToInt32(uploadFile.Length);  // if the file is smaller than the chunk size, upload the file as one chunk
-            }
-
-            byte[] buffer = new byte[chunkSize];
+                        
             FileStream fileStream = null;
             try
             {
+                int i = 1;
+
                 fileStream = new FileStream(fileNameIn, FileMode.Open, FileAccess.Read,
                 FileShare.Read, bufferSize: chunkSize, useAsync: true);
+
+                // If resumeUpload flag set, resumeToken set, and able to seek on the FileStream - try a resume
+                if (resumeUpload && resumeToken != "" && fileStream.CanSeek)
+                {
+                    // Copy the dParams dictionary so it can be reused after GetResumeIndex clears this.dParams
+                    //Dictionary<string, object> tDict = this.convertDestinationToSourceDictionary(this.dParams, true);
+                    Dictionary<string, object> tDict = this.CopyDictionary(this.dParams);
+
+                    // Get length of file with resumeToken name on server - this will be the position to start from
+                    string apiResponseString = this.GetResumeIndex(new Dictionary<string, object>()
+                    {
+                        { "resumetoken", resumeToken}
+                    }, out int retCode, out ulong resumeIndex);
+
+                    if (resumeIndex > 0)
+                    {
+                        try
+                        {
+                            fileStream.Seek(Convert.ToInt64(resumeIndex), SeekOrigin.Begin);
+                            i = (int)(resumeIndex / Convert.ToUInt64(chunkSize)) + 1;
+                        } catch (Exception)
+                        {
+                            // Something failed with seek - reset it to 0 and start upload over again
+                            fileStream.Seek(0, SeekOrigin.Begin);
+                            resumeIndex = 0;
+                            resumeUpload = false;
+                        }
+                    }
+                    this.dParams = tDict;
+                }
+
+                this.url = this.BASE_API_URL + "api2/file/writechunked";
+                // Build params list containing needed API fields
+
+                System.IO.FileInfo uploadFile = new System.IO.FileInfo(fileNameIn);
+                Dictionary<string, string> chunkedParams = new Dictionary<string, string>();
+
+                chunkedParams.Add("temp_name", resumeToken);
+
+                if (uploadFile.Length <= chunkSize)
+                {
+                    chunkSize = Convert.ToInt32(uploadFile.Length);  // if the file is smaller than the chunk size, upload the file as one chunk
+                }
+
+                byte[] buffer = new byte[chunkSize];
+
                 Int32 bytesRead = 0;
-                int i = 1;
                 var responseString = string.Empty;
 
                 Dictionary<string, object> apiParams = new Dictionary<string, object>();
@@ -957,32 +868,6 @@ namespace Stash
                 }
                 apiParams.Add("api_signature", this.getSignature());
 
-                string strVals = "";
-                foreach (KeyValuePair<string, object> kvp in apiParams)
-                {
-                    if (kvp.Value.GetType() == typeof(string[]))
-                    {
-                        strVals = strVals + String.Format("\"{0}\":[", kvp.Key.ToString());
-                        foreach (string strItem in (string[])kvp.Value)
-                        {
-                            strVals = strVals + String.Format("\"{0}\",", strItem);
-                        }
-                        strVals = strVals.Substring(0, strVals.Length - 1);     // Strip off final comma
-                        strVals = strVals + "],";
-                    }
-                    else
-                    {
-                        strVals = strVals + String.Format("\"{0}\":\"{1}\",", kvp.Key.ToString(), kvp.Value.ToString());
-                    }
-                }
-
-                if (strVals.Substring(strVals.Length - 1, 1) == ",")       // If last character is a comma
-                {
-                    strVals = strVals.Substring(0, strVals.Length - 1);     // Strip off final comma
-                }
-                // ToDo Replace with callback (see Issue #9, STASHAPI-NET-Dev)
-                var stopWatch = System.Diagnostics.Stopwatch.StartNew();
-
                 //Begin reading the file and send each chunk to the server.
                 while ((bytesRead = fileStream.Read(buffer, 0, buffer.Length)) > 0)
                 {
@@ -996,11 +881,11 @@ namespace Stash
                         double chunks = (double)fileStream.Length / (double)chunkSize;
                         var totalChunks = Math.Ceiling(chunks);
 
-                        if (i == 3)
-                        {
-                            stopWatch.Stop();
-                            TimeSpan ts = stopWatch.Elapsed;
-                        }
+                        //if (i == 3)
+                        //{
+                        //    stopWatch.Stop();
+                        //    TimeSpan ts = stopWatch.Elapsed;
+                        //}
                         if (chunkedParams.ContainsKey("progress"))
                         {
                             chunkedParams.Remove("progress");
@@ -1037,14 +922,11 @@ namespace Stash
                         form.Add(new ByteArrayContent(strParamsBytes), "params");
                         form.Add(new ByteArrayContent(chunkedParamBytes), "chunkedParams");
 
-                        //try
-                        //{
                         HttpResponseMessage response = await requestToServer.PostAsync(url, form);
                         if (!response.IsSuccessStatusCode) { throw new Exception(response.ReasonPhrase); }
                         // If code:200 not in response value, then throw exception with content
                         retVal = response.Content.ReadAsStringAsync().Result;
                         if (!retVal.Contains("\"code\":200")) { throw new Exception(retVal); }
-                        //retVal = response.Content.ReadAsStringAsync().Result;
 
                         ulong fileLength = Convert.ToUInt64(fileStream.Length);
                         ulong processedBytes = (ulong)buffer.Length * (ulong)i;
@@ -1061,23 +943,13 @@ namespace Stash
                         }
 
                         requestToServer.Dispose();
-                        //}
-                        //catch (Exception e)
-                        //{
-                        //    Console.WriteLine("ERROR - There was an error sending the chunk request: " + e.Message);
-                        //    retVal = "false";
-                        //}
+                        
                         i++;
                     }
                 }
-                //if (isCancelled)
-                //{
-                //    throw new OperationCanceledException("Client Cancelled Upload");
-                //}
             }
             catch (OperationCanceledException)
             {
-                Console.WriteLine("ERROR - Client Cancelled Upload");
                 retVal = JsonSerializer.Serialize(new Dictionary<string, object>()
                 {
                     { "code", 499 },
@@ -1401,6 +1273,13 @@ namespace Stash
                     if (!this.dParams.TryGetValue("fileKey", out object tFileKey) || tFileKey == null || tFileKey.ToString() == "")
                     {
                         throw new ArgumentException("Invalid fileKey Parameter");
+                    }
+                }
+                else if (opIn == "resumeindex")
+                {
+                    if (!this.dParams.TryGetValue("resumetoken", out object tToken) || tToken == null || tToken.ToString() == "")
+                    {
+                        throw new ArgumentException("Invalid resumetoken Parameter");
                     }
                 }
                 else if (opIn == "copy")
@@ -1905,106 +1784,8 @@ namespace Stash
             };
 
             // Chunk size is arbitrary - if file is smaller than chunk size, it will send it all in one chunk
-            return this.putFileChunked(fileNameIn, srcIdentifier, 1000000, timeOut, callback, cts, out retCode, out fileId, out fileAliasId);
-
-
-/*
-            string apiResult = "";
-            retCode = 0;
-            fileId = 0; fileAliasId = 0;
-            Dictionary<string, object> retVal = null;
-            //bool overwriteFile = false; UInt64 owFileId = 0;
-
-            System.IO.FileInfo fInfo = new System.IO.FileInfo(fileNameIn);
-            if (!fInfo.Exists)
-            {
-                throw new Exception("Incorrect Input File Path or File Does Not Exist");
-            }
-
-            //this.dParams = srcIdentifier;
-            //if (!this.validateParams("write")) { throw new ArgumentException("Invalid Input Parameters"); }
-
-            // No longer needed - automatic overwrites are handled by server with creating a new version of file
-            //if (srcIdentifier.TryGetValue("overwriteFile", out object owFile))
-            //{
-            //    overwriteFile = (owFile.ToString() == "1" ? true : false);
-            //    if (overwriteFile)
-            //    {
-            //        if (!srcIdentifier.TryGetValue("overwriteFileId", out object objOwFileId))
-            //        {
-            //            throw new ArgumentException("overwriteFileId parameter not specified");
-            //        }
-            //        owFileId = Convert.ToUInt64(objOwFileId);
-            //        if (owFileId < 1) { throw new Exception("Invalid overwriteFileId value"); }
-            //    }
-            //}
-
-            // Check if file exists on the server before uploading
-            //Dictionary<string, object> fileInfoIdentifier = new Dictionary<string, object>();
-            //if (overwriteFile)
-            //{
-            //    fileInfoIdentifier.Add("fileId", owFileId);
-            //}
-            //else
-            //{
-            //    fileInfoIdentifier.Add("fileName", fInfo.Name);
-            //    if (srcIdentifier.TryGetValue("destFolderNames", out object tFolderNames))
-            //    {
-            //        fileInfoIdentifier.Add("folderNames", tFolderNames);
-            //    }
-
-            //    if (srcIdentifier.TryGetValue("destFolderId", out object tFolderId))
-            //    {
-            //        fileInfoIdentifier.Add("folderId", tFolderId);
-            //    }
-            //}
-
-            //Dictionary<string, object> apiFileInfoResult = this.getFileInfo(fileInfoIdentifier, out retCode, out string fileName, out ulong fileSize, out ulong fileTimestamp, out ulong overwriteFileAliasId);
-            //if (overwriteFile && retCode == 404)
-            //{
-            //    throw new Exception("Unable to Upload File, Overwrite Requested, but File Does Not Exist");
-            //}
-            //else if (!overwriteFile && retCode != 404)
-            //{
-            //    // File exists, or error occurred
-            //    throw new Exception("Unable to Upload File, File with Same Name Already Exists in Destination Folder");
-            //}
-
-            this.dParams = srcIdentifier;
-            this.url = this.BASE_API_URL + "api2/file/write";
-            if (!this.validateParams("write")) { throw new ArgumentException("Invalid Input Parameters"); }
-
-            apiResult = this.SendFileRequest(fileNameIn, timeOut);
-            if (this.dParams != null) { this.dParams.Clear(); }
-
-            retCode = GetResponseCodeDict(apiResult, out retVal);
-
-            if (retCode == 200)
-            {
-                object fileAliasIdObj;
-                object fileIdObj;
-                retVal.TryGetValue("fileAliasId", out fileAliasIdObj);
-                retVal.TryGetValue("fileId", out fileIdObj);
-                if (fileAliasIdObj != null)
-                {
-                    fileAliasId = Convert.ToUInt64(fileAliasIdObj.ToString());
-                }
-                if (fileIdObj != null)
-                {
-                    fileId = Convert.ToUInt64(fileIdObj.ToString());
-                }
-            }
-            else
-            {
-                GetError(retVal, out retCode, out string msg, out string extMsg);
-                if (this.verbosity)
-                {
-                    Console.WriteLine("- Error Occurred putFile, Code: " + retCode.ToString() + " Message: " + (msg != null ? msg.ToString() : "Not Available") + " Extended Message: " + (extMsg != null ? extMsg.ToString() : "Not Available"));
-                }
-            }
-
-            return retVal;
-*/
+            // Resume token isn't used in putFile()
+            return this.putFileChunked(fileNameIn, srcIdentifier, 1000000, timeOut, callback, cts, out string resumeToken, out retCode, out fileId, out fileAliasId);
         }
 
         // Uploads a file to the Vault Support system
@@ -2039,13 +1820,13 @@ namespace Stash
         }
 
         // Uploads file to the user's Vault using Chunks
-        public Dictionary<string, object> putFileChunked(string fileNameIn, Dictionary<string, object> srcIdentifier, int chunkSize, int timeOut, Action<ulong, ulong, string> callback, System.Threading.CancellationTokenSource cts, out int retCode, out UInt64 fileId, out UInt64 fileAliasId)
+        public Dictionary<string, object> putFileChunked(string fileNameIn, Dictionary<string, object> srcIdentifier, int chunkSize, int timeOut, Action<ulong, ulong, string> callback, System.Threading.CancellationTokenSource cts, out string resumeToken, out int retCode, out UInt64 fileId, out UInt64 fileAliasId)
         {
             string apiResult = "";
+
             retCode = 0;
             fileId = 0; fileAliasId = 0;
             Dictionary<string, object> retVal = null;
-            //bool overwriteFile = false; UInt64 owFileId = 0;
             
             System.IO.FileInfo fInfo = new System.IO.FileInfo(fileNameIn);
             if (!fInfo.Exists)
@@ -2053,59 +1834,33 @@ namespace Stash
                 throw new Exception("Incorrect Input File Path or File Does Not Exist");
             }
 
-            //this.dParams = srcIdentifier;
-            //if (!this.validateParams("write")) { throw new ArgumentException("Invalid Input Parameters"); }
-
-            //if (srcIdentifier.TryGetValue("overwriteFile", out object owFile))
-            //{
-            //    overwriteFile = (owFile.ToString() == "1" ? true : false);
-            //    if (overwriteFile)
-            //    {
-            //        if (!srcIdentifier.TryGetValue("overwriteFileId", out object objOwFileId))
-            //        {
-            //            throw new ArgumentException("overwriteFileId parameter not specified");
-            //        }
-            //        owFileId = Convert.ToUInt64(objOwFileId);
-            //        if (owFileId < 1) { throw new Exception("Invalid overwriteFileId value"); }
-            //    }
-            //}
-
-            //// Check if file exists on the server before uploading
-            //Dictionary<string, object> fileInfoIdentifier = new Dictionary<string, object>();
-            //if (overwriteFile)
-            //{
-            //    fileInfoIdentifier.Add("fileId", owFileId);
-            //}
-            //else
-            //{
-            //    fileInfoIdentifier.Add("fileName", fInfo.Name);
-            //    if (srcIdentifier.TryGetValue("destFolderNames", out object tFolderNames))
-            //    {
-            //        fileInfoIdentifier.Add("folderNames", tFolderNames);
-            //    }
-
-            //    if (srcIdentifier.TryGetValue("destFolderId", out object tFolderId))
-            //    {
-            //        fileInfoIdentifier.Add("folderId", tFolderId);
-            //    }
-            //}
-
-            //Dictionary<string, object> apiFileInfoResult = this.getFileInfo(fileInfoIdentifier, out retCode, out string fileName, out ulong fileSize, out ulong fileTimestamp, out ulong overwriteFileAliasId);
-            //if (overwriteFile && retCode == 404)
-            //{
-            //    throw new Exception("Unable to Upload File, Overwrite Requested, but File Does Not Exist");
-            //}
-            //else if (!overwriteFile && retCode != 404)
-            //{
-            //    // File exists, or error occurred
-            //    throw new Exception("Unable to Upload File, File with Same Name Already Exists in Destination Folder");
-            //}
+            bool resumeUpload = false;
+            if (srcIdentifier.TryGetValue("resumetoken", out object objResumeToken))
+            {
+                // The resumetoken was provided in the request parameters, use it to resume the upload
+                resumeToken = "";
+                if (objResumeToken != null)
+                {
+                    resumeToken = objResumeToken.ToString();
+                }
+                resumeUpload = true;
+            }
+            else
+            {
+                // Generate a temp name for the server to store the file. This prevents files of the same name from confilicting with each other.
+                // This becomes the token for resuming uploads
+                const string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+                Random random = new Random();
+                resumeToken = new string(Enumerable.Repeat(chars, 24)
+                  .Select(s => s[random.Next(s.Length)]).ToArray());
+                resumeToken += fInfo.Extension;        // Add file extension
+            }
 
             this.dParams = srcIdentifier;
             this.url = this.BASE_API_URL + "api2/file/writechunked";
             if (!this.validateParams("write")) { throw new ArgumentException("Invalid Input Parameters"); }
 
-            apiResult = this.SendFileRequestChunked(fileNameIn, chunkSize, timeOut, callback, cts).Result;
+            apiResult = this.SendFileRequestChunked(fileNameIn, chunkSize, timeOut, callback, cts, resumeToken, resumeUpload).Result;
             if (this.dParams != null) { this.dParams.Clear(); }
 
             retCode = GetResponseCodeDict(apiResult, out retVal);
@@ -2138,6 +1893,38 @@ namespace Stash
                 }
             }
             return retVal;
+        }
+
+        // Function gets the byte offset to resume a writechunked file upload
+        public string GetResumeIndex(Dictionary<string, object> srcIdentifier, out int retCode, out UInt64 resumeIndex)
+        {
+            string apiResult = "";
+            retCode = 0; resumeIndex = 0;
+
+            Dictionary<string, object> retVal = null;
+
+            this.dParams = srcIdentifier;
+            this.url = this.BASE_API_URL + "api2/file/resumeindex";
+
+            if (!this.validateParams("resumeindex")) { throw new ArgumentException("Invalid Input Parameters"); }
+
+            apiResult = this.SendRequest();
+            if (this.dParams != null) { this.dParams.Clear(); }
+
+            retCode = GetResponseCodeDict(apiResult, out retVal);
+
+            if (retCode == 200)
+            {
+                resumeIndex = retVal.TryGetValue("index", out object objIndex) ? Convert.ToUInt64(objIndex.ToString()) : 0;
+            }
+
+            if (retCode != 200 && this.verbosity)
+            {
+                GetError(apiResult, out int code, out string msg, out string extMsg);
+                Console.WriteLine("- Error Occurred resumeIndex, Code: " + retCode.ToString() + " Message: " + (msg != null ? msg.ToString() : "Not Available") + " Extended Message: " + (extMsg != null ? extMsg.ToString() : "Not Available"));
+            }
+
+            return apiResult;           
         }
 
         // Function copies a file in the Vault, creating an entirely new copy, including new files in the storage location(s)
@@ -3691,6 +3478,37 @@ namespace Stash
         }
 
         /*
+         * Deep copies a dictionary
+         * Useful for calling GetResumeIndex() before a writechunked operation to preserve the dictionary passed into SendFileRequestChunked()
+         */
+        public Dictionary<string, object> CopyDictionary(Dictionary<string, object> dictIn)
+        {
+            // Copy all keys in the dictionary, but rename "destFileName", "destFolderNames", "destFolderId", "destFilePath"
+            Dictionary<string, object> result = new Dictionary<string, object>();
+
+            // Look for dest parameters or source parameters so the conversion works for both destination params, and inadvertent source params specified as destination params
+            foreach (KeyValuePair<string, object> keyValue in dictIn)
+            {
+                if (keyValue.Key == "destFolderNames" || keyValue.Key == "folderNames")
+                {
+                    // Assume destFolderNames or folderNames is a one-deep string array; copy each value
+                    List<string> tList = new List<string>();
+                    foreach (string str in (string[])keyValue.Value)
+                    {
+                        tList.Add(str);
+                    }
+                    result.Add(keyValue.Key, tList.ToArray());
+                }
+                else
+                {
+                    result.Add(keyValue.Key, keyValue.Value.ToString());
+                }
+            }
+
+            return result;
+        }
+
+        /*
          * Converts a destination dictionary to a source dictionary
          * Useful for calling getFileInfo() before a write/writechunked operation to check if the destination exists
          * if allKeys = true, will convert all keys, otherwise will just convert/copy destFileName, destFolderNames, destFolderId, and destFilePath
@@ -3709,8 +3527,13 @@ namespace Stash
                 }
                 else if (keyValue.Key == "destFolderNames" || keyValue.Key == "folderNames")
                 {
-                    result.Add("folderNames", keyValue.Value);
-                    // To Do - unknow deep or shallow copy of a string array
+                    // Assume destFolderNames or folderNames is a one-deep string array; copy each value
+                    List<string> tList = new List<string>();
+                    foreach (string str in (string[])keyValue.Value)
+                    {
+                        tList.Add(str);
+                    }
+                    result.Add("folderNames", tList.ToArray());
                 }
                 else if (keyValue.Key == "destFolderId" || keyValue.Key == "folderId")
                 {
