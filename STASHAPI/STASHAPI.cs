@@ -29,7 +29,7 @@ namespace Stash
 {
     public class StashAPI : Object
     {
-        public const string FILE_VERSION = "1.0.1";
+        public const string FILE_VERSION = "1.0.2";
         public const string STASHAPI_VERSION = "1.0";       // API Version
         public const int STASHAPI_ID_LENGTH = 32;        // api_id String length
         public const int STASHAPI_PW_LENGTH = 32;        // API_PW String length (minimum)
@@ -42,8 +42,10 @@ namespace Stash
         public const string BASE_VAULT_FOLDER = "My Home";
         public const string BASE_URL = "https://www.stage.stashbusiness.com/";      // This is the URL to send requests to, can be overrided by BASE_API_URL in the constructor
         public const string ENC_ALG = "aes-256-cbc";        // Encryption algorithm for use in encryptString & decryptString(), encryptFile() & decryptFile(), uses an IV of 16 bytes
-        public const int STASH_ENC_BLOCKSIZE = 1024;        // The size of the data block to encrypt; must match the blocksize used in the decryption platform - IV.length
-        public const int STASH_DEC_BLOCKSIZE = 1040;        // The size of the data block to decrypt; must be STASH_ENC_BLOCKSIZE + IV.length; must match the blocksize used in the encryption platform + IV.length
+        //public const int STASH_ENC_BLOCKSIZE = 1024;        // The size of the data block to encrypt; must match the blocksize used in the decryption platform - IV.length
+        //public const int STASH_DEC_BLOCKSIZE = 1040;        // The size of the data block to decrypt; must be STASH_ENC_BLOCKSIZE + IV.length; must match the blocksize used in the encryption platform + IV.length
+        public const int STASH_ENC_BLOCKSIZE = 32768;        // The size of the data block to encrypt; must match the blocksize used in the decryption platform - IV.length
+        public const int STASH_DEC_BLOCKSIZE = 32784;        // The size of the data block to decrypt; must be STASH_ENC_BLOCKSIZE + IV.length; must match the blocksize used in the encryption platform + IV.length
 
         private static HttpClient client;
 
@@ -329,7 +331,8 @@ namespace Stash
             using (CryptoStream csEncrypt = new CryptoStream(msEncrypt, encryptor, CryptoStreamMode.Read))
             using (BinaryReader srEncrypt = new BinaryReader(csEncrypt))
             {
-                ct = srEncrypt.ReadBytes(1024);
+                //ct = srEncrypt.ReadBytes(1024);
+                ct = srEncrypt.ReadBytes(STASH_ENC_BLOCKSIZE);
             }
 
             retVal = new byte[ct.Length + crypto.IV.Length];
@@ -343,7 +346,7 @@ namespace Stash
         // Buffer Block size must match StashEncryption.php::STASH_DEC_BLOCKSIZE to be cross-platform compatible
         public bool DecryptFileChunked(string fileName, out string decFileName, out string errMsg)
         {
-            const int STASH_DEC_BLOCKSIZE = 1040;
+            //const int STASH_DEC_BLOCKSIZE = 1040;
             decFileName = fileName + ".dec";
             errMsg = "";
             byte[] strIv;                                       // The Init Vector
@@ -835,9 +838,9 @@ namespace Stash
                     this.dParams = tDict;
                 }
 
-                this.url = this.BASE_API_URL + "api2/file/writechunked";
-                // Build params list containing needed API fields
+                // Do not need to set URL because this is a base call, Support File writes, File Writes, and Chunked File Writes will all set the URL before calling this function
 
+                // Build params list containing needed API fields
                 System.IO.FileInfo uploadFile = new System.IO.FileInfo(fileNameIn);
                 Dictionary<string, string> chunkedParams = new Dictionary<string, string>();
 
@@ -1808,9 +1811,18 @@ namespace Stash
             return this.putFileChunked(fileNameIn, srcIdentifier, 1000000, timeOut, callback, cts, out string resumeToken, out retCode, out fileId, out fileAliasId);
         }
 
-        // Uploads a file to the Vault Support system
-        // This is used to transmit log/troubleshooting data from clients to a central repository on the server
-        public Dictionary<string, object> putFileSupport(string fileNameIn, int timeOut, out int retCode, out string msg, out string extMsg)
+        /// <summary>
+        /// Uploads a file to the Vault Support system
+        /// This is used to transmit log/troubleshooting data from clients to a central repository on the server
+        /// </summary>
+        /// <param name="fileNameIn">string - the full path and filename to upload</param>
+        /// <param name="timeOut">int - the timeout value for the upload, in seconds</param>
+        /// <param name="retCode">int - output, the return code from the upload (e.g. 200, 404, etc) </param>
+        /// <param name="msg">string - output, the error message if one occurs</param>
+        /// <param name="extMsg">string - output, the extended error message, if one occurs</param>
+        /// <returns>Dictionary<string,object> - the response from the API call to writesupport</returns>
+        /// <exception cref="Exception"></exception>
+        public Dictionary<string, object> putFileSupport(string fileNameIn, Dictionary<string, object> srcIdentifier, int timeOut, out int retCode, out string msg, out string extMsg)
         {
             string apiResult = ""; msg = ""; extMsg = ""; retCode = 0;
             Dictionary<string, object> retVal = null;
@@ -1822,7 +1834,7 @@ namespace Stash
             }
 
             this.url = this.BASE_API_URL + "api2/support/writesupport";
-
+            this.dParams = srcIdentifier;
             apiResult = this.SendFileRequest(fileNameIn, timeOut);
 
             retCode = GetResponseCodeDict(apiResult, out retVal);
