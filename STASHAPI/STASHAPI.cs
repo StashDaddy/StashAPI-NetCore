@@ -29,7 +29,7 @@ namespace Stash
 {
     public class StashAPI : Object
     {
-        public const string FILE_VERSION = "1.0.2";
+        public const string FILE_VERSION = "1.0.3";
         public const string STASHAPI_VERSION = "1.0";       // API Version
         public const int STASHAPI_ID_LENGTH = 32;        // api_id String length
         public const int STASHAPI_PW_LENGTH = 32;        // API_PW String length (minimum)
@@ -258,7 +258,7 @@ namespace Stash
             crypto.Key = Encoding.ASCII.GetBytes(this.api_pw);
             crypto.Mode = CipherMode.CBC;
             crypto.Padding = PaddingMode.PKCS7;
-
+            
             ICryptoTransform encryptor = crypto.CreateEncryptor(crypto.Key, crypto.IV);
             using (MemoryStream msEncrypt = new MemoryStream())
             {
