@@ -29,7 +29,7 @@ namespace Stash
 {
     public class StashAPI : Object
     {
-        public const string FILE_VERSION = "1.0.3";
+        public const string FILE_VERSION = "1.0.4";
         public const string STASHAPI_VERSION = "1.0";       // API Version
         public const int STASHAPI_ID_LENGTH = 32;        // api_id String length
         public const int STASHAPI_PW_LENGTH = 32;        // API_PW String length (minimum)
@@ -650,20 +650,30 @@ namespace Stash
         }
 
         // Downloads a file from the Vault and stores it in _fileNameIn_
-        public string sendDownloadRequest(string fileNameIn, ulong fileSize, int timeOut, Action<ulong, ulong, string> callback, System.Threading.CancellationTokenSource cts, out int retCode)
+
+        /// <summary>
+        /// Downloads a file from the Vault and stores it in a local file specified by fileNameIn
+        /// </summary>
+        /// <param name="fileNameIn">string, the full path and name of file to download content to</param>
+        /// <param name="fileSize">ulong, the size of the file</param>
+        /// <param name="timeOut">int, the timeout (in seconds) for the transfer settings</param>
+        /// <param name="callback">Action<ulong, ulong, string>, a callback function to update status</param>
+        /// <param name="cts">CancellationTokenSource, used to indicate if the download should be cancelled</param>
+        /// <param name="retCode">int, output - the return code (e.g. 200, 404, etc)</param>
+        /// <returns>string, "1" for success, otherwise an error message</returns>
+        /// <exception cref="ArgumentException">thrown for errors with the URL</exception>
+        public string sendDownloadRequest(string fileNameIn, ulong fileSize, int timeOut, Action<ulong, ulong, string> callback, CancellationTokenSource cts, out int retCode)
         {
             string payload = ""; 
             retCode = 0;
 
             if (this.verbosity) { Console.WriteLine(" - sendDownloadRequest - "); }
             if (this.url == "") { throw new ArgumentException("Invalid URL"); }
-            System.IO.FileStream fileStream = null;
-            //WebResponse objResponse = null;
-            System.IO.Stream sendStream = null;
+            FileStream fileStream = null;
+            Stream sendStream = null;
 
             try
             {
-                //System.Net.HttpWebRequest objHWR = (HttpWebRequest)WebRequest.Create(this.url);
                 Dictionary<string, object> apiParams = new Dictionary<string, object>();
                 apiParams.Add("url", this.url);
                 apiParams.Add("api_version", this.api_version);
@@ -685,9 +695,10 @@ namespace Stash
                 // Build payload
                 payload = JsonSerializer.Serialize(apiParams);       // apiParams is already merged if need be in signature above
                                                                      //byte[] payloadBytes = Encoding.UTF8.GetBytes(payload);
+                
                 var t = Task.Run(() => PostURIasStream(this.url, payload, timeOut, cts.Token));
                 t.Wait();
-                if (cts.IsCancellationRequested) { throw new Exception("Client Cancelled Download");  }
+                if (cts.IsCancellationRequested) { throw new OperationCanceledException("Client Cancelled Download");  }
 
                 sendStream = t.Result;                
 
@@ -746,15 +757,18 @@ namespace Stash
                 retCode = 200;
                 return "1";
             }
-            catch (OperationCanceledException ex)
-            {
-                retCode = 499;
-                return ex.Message;
-            }
             catch (Exception ex)
             {
-                retCode = 500;
-                return ex.Message;
+                if (ex is OperationCanceledException || ex is TaskCanceledException || ex.InnerException.Message == "A task was canceled.")
+                {
+                    retCode = 499;
+                    return ex.Message;
+                }
+                else
+                {
+                    retCode = 500;
+                    return ex.Message;
+                }
             }
             finally
             {
@@ -1764,7 +1778,7 @@ namespace Stash
         // STASH API HELPER FUNCTIONS
         // *********************************************************************************************
         // Downloads a file from the user's vault
-        public string getFile(Dictionary<string, object> srcIdentifier, string fileNameOut, ulong fileSize, int timeOut, Action<ulong, ulong, string> callback, System.Threading.CancellationTokenSource cts, out int retCode)
+        public string getFile(Dictionary<string, object> srcIdentifier, string fileNameOut, ulong fileSize, int timeOut, Action<ulong, ulong, string> callback, CancellationTokenSource cts, out int retCode)
         {
             string apiResult = "";
             retCode = 0;
