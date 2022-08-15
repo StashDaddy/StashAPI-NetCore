@@ -29,7 +29,7 @@ namespace Stash
 {
     public class StashAPI : Object
     {
-        public const string FILE_VERSION = "1.0.4";
+        public const string FILE_VERSION = "1.0.5";
         public const string STASHAPI_VERSION = "1.0";       // API Version
         public const int STASHAPI_ID_LENGTH = 32;        // api_id String length
         public const int STASHAPI_PW_LENGTH = 32;        // API_PW String length (minimum)
@@ -130,6 +130,9 @@ namespace Stash
         public string url = "";                         // The URL to send the request to
         public Dictionary<string, object> dParams;               // Associative array of parameters to send with the request
         public string BASE_API_URL = "";           // The BASE URL to use for the request
+        public string apiSubsystem = "";
+        public string apiOperation = "";
+        public List<string> NoIdOperations = new List<string>{"getapicreds", "getsecret"};  // These requests don't need an API_ID
 
         // STASHAPI.CS Constructor
         public StashAPI(string apiId = "", string apiPw = "", string urlIn = "", bool verbosity = false)
@@ -148,7 +151,7 @@ namespace Stash
             if (!this.BASE_API_URL.EndsWith("/"))
             {
                 this.BASE_API_URL += "/";
-            }
+            }            
         }
 
         public bool getVerbosity()
@@ -237,25 +240,40 @@ namespace Stash
                         counter = fileLen;
                     }
 
-                    ct = EncryptString(pt);
+                    ct = EncryptString(pt, "");
                     wrt.Write(ct);
                 }
             }
             return true;
         }
 
-        // Encrypts a String with the API_PW
-        public string EncryptString(string strString, bool returnHexBits)
+        // Encrypts a String with keyIn, or if empty, the API_PW
+        public string EncryptString(string strString, string keyIn, bool returnHexBits)
         {
             string retVal = "";
             byte[] tRetVal;
 
+            // If both keyIn and api_pw are empty/null, return empty string - this usually occurs during getApiCreds
+            // where the keyIn hasn't been calculated yet and the api_pw is not required
+            if (keyIn == "" && (this.api_pw == null || this.api_pw == ""))
+            {
+                return "";
+            }
+
             if (strString == "") { return ""; }
-            if (this.api_pw == "") { return ""; }
-            if (this.api_pw.Length < 32) { throw new ArgumentException("API_PW must be at least 32 characters"); }
+            if (this.api_pw == "" && keyIn == "") { return ""; }
+            if (this.api_pw.Length != 32 && keyIn == "") { throw new ArgumentException("API_PW must be 32 characters in length"); }
+            if (this.api_pw == "" && keyIn.Length != 32) { throw new ArgumentException("keyIn must be 32 characters in length"); }
 
             Aes crypto = Aes.Create();
-            crypto.Key = Encoding.ASCII.GetBytes(this.api_pw);
+            if (keyIn != "")
+            {
+                crypto.Key = Encoding.ASCII.GetBytes(keyIn);
+            }
+            else
+            {
+                crypto.Key = Encoding.ASCII.GetBytes(this.api_pw);
+            }
             crypto.Mode = CipherMode.CBC;
             crypto.Padding = PaddingMode.PKCS7;
             
@@ -311,18 +329,34 @@ namespace Stash
             return retVal;
         }
 
-        // Encrypts a set of bytes with the API_PW
-        public byte[] EncryptString(byte[] strString)
+        // Encrypts a set of bytes with keyIn, or if empty, the API_PW
+        // Returns the encrypted string, or byte array with single entry set to 0
+        public byte[] EncryptString(byte[] strString, string keyIn)
         {
             byte[] retVal;
             byte[] ct;
 
+            // If both keyIn and api_pw are empty/null, return empty string - this usually occurs during getApiCreds
+            // where the keyIn hasn't been calculated yet and the api_pw is not required
+            if (keyIn == "" && (this.api_pw == null || this.api_pw == ""))
+            {
+                return new byte[0];
+            }
+
             if (strString.Length < 1) { throw new ArgumentException("Input Bytes are Empty"); }
-            if (this.api_pw == "") { return null; }
-            if (this.api_pw.Length < 32) { throw new ArgumentException("API_PW must be at least 32 characters"); }//if (this.api_pw.Length < 32) { throw new ArgumentException("API_PW must be at least 32 characters"); }
+            if (this.api_pw == "" && keyIn == "") { return null; }
+            if (this.api_pw.Length != 32 && keyIn == "") { throw new ArgumentException("API_PW must be 32 characters in length"); }//if (this.api_pw.Length < 32) { throw new ArgumentException("API_PW must be at least 32 characters"); }
+            if (this.api_pw == "" && keyIn.Length != 32) { throw new ArgumentException("keyIn must be 32 characters in length"); }
 
             Aes crypto = Aes.Create();
-            crypto.Key = Encoding.ASCII.GetBytes(this.api_pw);
+            if (keyIn != "")
+            {
+                crypto.Key = Encoding.ASCII.GetBytes(keyIn);
+            }
+            else
+            {
+                crypto.Key = Encoding.ASCII.GetBytes(this.api_pw);
+            }
             crypto.Mode = CipherMode.CBC;
             crypto.Padding = PaddingMode.PKCS7;
 
@@ -1295,6 +1329,18 @@ namespace Stash
             {
                 if (this.dParams == null && opIn != "none") { throw new ArgumentException("Parameters Can't Be Null"); }
 
+                // Set the subsystem and operation if URL contains them
+                if (this.url != "")
+                {
+                    // Parse urlIn to get the subsystem and operation 
+                    string[] listUrl = this.url.Split("/");
+                    if (listUrl.Length == 6)
+                    {
+                        this.apiSubsystem = listUrl[4] != null ? listUrl[4] : "";
+                        this.apiOperation = listUrl[5] != null ? listUrl[5] : "";
+                    }
+                }
+
                 if (opIn == "read")
                 {
                     this.validateSourceParams(false, false);
@@ -1446,6 +1492,26 @@ namespace Stash
                 {
                     this.validateCredParams(false, true, false, false);
                 }
+                else if (opIn == "getsecret")
+                {
+                    this.validateCredParams(false, true, false, false);
+                    if (!this.dParams.TryGetValue("pubkey", out object tPubKey) || tPubKey == null || tPubKey.ToString() == "")
+                    {
+                        throw new ArgumentException("Invalid pubkey Parameter");
+                    }
+                    this.api_id = "01010101010101010101010101010101";       // Set to nonsense ID, an ID is not needed for this request
+                    this.api_pw = this.api_id;       // Set to 'known' string, it will be used to sign the request only
+                }
+                else if (opIn == "getapicreds")
+                {
+                    this.validateCredParams(true, true, false, false);
+                    if (!this.dParams.TryGetValue("id", out object tId) || tId == null || tId.ToString() == "")
+                    {
+                        throw new ArgumentException("Invalid id Parameter");
+                    }
+                    this.api_id = "01010101010101010101010101010101";       // Set to nonsense ID, an ID is not needed for this request
+                    this.api_pw = this.api_id;       // Set to 'known' string, it will be used to sign the request only
+                }
                 else if (opIn == "setperms")
                 {
                     this.validateSetPermParams();
@@ -1534,6 +1600,10 @@ namespace Stash
             {
                 foreach (KeyValuePair<string, object> kvp in dictIn)
                 {
+                    if (kvp.Value == null)
+                    {
+                        continue;
+                    }
                     s = s + String.Format("{0}=", kvp.Key.ToString());
                     if (kvp.Value.GetType() == typeof(string[]))
                     {
@@ -2874,6 +2944,84 @@ namespace Stash
             }
 
             return retVal;
+        }
+
+        /// <summary>
+        /// Gets a secret via Diffie-Hellman key agreement to use in encrypting values sent to the server
+        /// </summary>
+        /// <param name="srcIdentifier">Dictionary<string,object>, the input values (e.g. accountUsername) for the request</param>
+        /// <param name="retCode">int, output, the return code from the API call</param>
+        /// <param name="pubKey">string, output, the public key used to initiate the DH key agreement on the server</param>
+        /// <param name="privKey">string, output, the private key to be used for the DH key agreement calculation on the client</param>
+        /// <param name="dhId">string, output, the ID used to identify the DH key agreement params on the server</param>
+        /// <param name="serverPubKey">string, output, the server's public key to be used for the DH key agreement calculation on the client</param>
+        /// <returns>string, a json encoded string containing 'id' and 'pubkey' to use in API requests</returns>
+        /// <exception cref="ArgumentException">for errors in input parameters</exception>
+        public string getSecret(Dictionary<string, object> srcIdentifier, out int retCode, out string dhId, out string serverPubKey)
+        {
+            string apiResult = ""; dhId = ""; serverPubKey = "";
+            retCode = 0;
+            Dictionary<string, object> retVal = null;
+
+            this.dParams = srcIdentifier;
+            this.url = this.BASE_API_URL + "api2/auth/getsecret";
+
+            if (!this.validateParams("getsecret")) { throw new ArgumentException("Invalid Input Parameters"); }
+
+            apiResult = this.SendRequest();
+            if (this.dParams != null) { this.dParams.Clear(); }
+
+            retCode = GetResponseCodeDict(apiResult, out retVal);
+
+            if (retCode == 200)
+            {
+                // parse out dhId and serverPubKey
+                using (JsonDocument apiResponse = JsonDocument.Parse(apiResult))
+                {
+                    JsonElement secretOutput = apiResponse.RootElement.GetProperty("secret");
+                    dhId = (secretOutput.TryGetProperty("id", out JsonElement idElement) ? idElement.GetString() : "");
+                    serverPubKey = (secretOutput.TryGetProperty("pubkey", out JsonElement pubKeyElement) ? Encoding.UTF8.GetString(Convert.FromBase64String(pubKeyElement.GetString())) : "");
+                }
+            }
+            else if (retCode != 200 && this.verbosity)
+            {
+                GetError(retVal, out int code, out string msg, out string extMsg);
+                Console.WriteLine("- Error Occurred GetSecret, Code: " + retCode.ToString() + " Message: " + (msg != null ? msg.ToString() : "Not Available") + " Extended Message: " + (extMsg != null ? extMsg.ToString() : "Not Available"));
+            }
+
+            return apiResult;
+        }
+
+        /// <summary>
+        /// Gets a user's API credentials (API_ID and API_PW)
+        /// </summary>
+        /// <param name="srcIdentifier">Dictionary<string,object>, the input values (e.g. accountUsername) for the request</param>
+        /// <param name="retCode">int, output, the return code from the API call</param>
+        /// <returns>string, a json encoded string containing 'api_id' and 'api_pw' to use in API requests</returns>
+        /// <exception cref="ArgumentException">for errors in input parameters</exception>
+        public string getApiCreds(Dictionary<string, object> srcIdentifier, out int retCode)
+        {
+            string apiResult = "";
+            retCode = 0;
+            Dictionary<string, object> retVal = null;
+
+            this.dParams = srcIdentifier;
+            this.url = this.BASE_API_URL + "api2/auth/getapicreds";
+
+            if (!this.validateParams("getsecret")) { throw new ArgumentException("Invalid Input Parameters"); }
+
+            apiResult = this.SendRequest();
+            if (this.dParams != null) { this.dParams.Clear(); }
+
+            retCode = GetResponseCodeDict(apiResult, out retVal);
+
+            if (retCode != 200 && this.verbosity)
+            {
+                GetError(retVal, out int code, out string msg, out string extMsg);
+                Console.WriteLine("- Error Occurred GetApiCreds, Code: " + retCode.ToString() + " Message: " + (msg != null ? msg.ToString() : "Not Available") + " Extended Message: " + (extMsg != null ? extMsg.ToString() : "Not Available"));
+            }
+
+            return apiResult;
         }
 
         // Function sets the access permissions for a specified folder
