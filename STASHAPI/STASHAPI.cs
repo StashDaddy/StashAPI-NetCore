@@ -29,7 +29,7 @@ namespace Stash
 {
     public class StashAPI : Object
     {
-        public const string FILE_VERSION = "1.0.5";
+        public const string FILE_VERSION = "1.0.6";
         public const string STASHAPI_VERSION = "1.0";       // API Version
         public const int STASHAPI_ID_LENGTH = 32;        // api_id String length
         public const int STASHAPI_PW_LENGTH = 32;        // API_PW String length (minimum)
@@ -1494,23 +1494,23 @@ namespace Stash
                 }
                 else if (opIn == "getsecret")
                 {
+                    this.api_id = "01010101010101010101010101010101";       // Set to nonsense ID, an ID is not needed for this request
+                    this.api_pw = this.api_id;       // Set to 'known' string, it will be used to sign the request only
                     this.validateCredParams(false, true, false, false);
                     if (!this.dParams.TryGetValue("pubkey", out object tPubKey) || tPubKey == null || tPubKey.ToString() == "")
                     {
                         throw new ArgumentException("Invalid pubkey Parameter");
                     }
-                    this.api_id = "01010101010101010101010101010101";       // Set to nonsense ID, an ID is not needed for this request
-                    this.api_pw = this.api_id;       // Set to 'known' string, it will be used to sign the request only
                 }
                 else if (opIn == "getapicreds")
                 {
+                    this.api_id = "01010101010101010101010101010101";       // Set to nonsense ID, an ID is not needed for this request
+                    this.api_pw = this.api_id;       // Set to 'known' string, it will be used to sign the request only
                     this.validateCredParams(true, true, false, false);
                     if (!this.dParams.TryGetValue("id", out object tId) || tId == null || tId.ToString() == "")
                     {
                         throw new ArgumentException("Invalid id Parameter");
                     }
-                    this.api_id = "01010101010101010101010101010101";       // Set to nonsense ID, an ID is not needed for this request
-                    this.api_pw = this.api_id;       // Set to 'known' string, it will be used to sign the request only
                 }
                 else if (opIn == "setperms")
                 {
@@ -3008,7 +3008,7 @@ namespace Stash
             this.dParams = srcIdentifier;
             this.url = this.BASE_API_URL + "api2/auth/getapicreds";
 
-            if (!this.validateParams("getsecret")) { throw new ArgumentException("Invalid Input Parameters"); }
+            if (!this.validateParams("getapicreds")) { throw new ArgumentException("Invalid Input Parameters"); }
 
             apiResult = this.SendRequest();
             if (this.dParams != null) { this.dParams.Clear(); }
