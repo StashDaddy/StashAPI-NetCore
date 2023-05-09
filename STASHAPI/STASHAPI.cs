@@ -1,5 +1,5 @@
 /* This is a Visual Studio Shared Project
- * This library requires .NET 5.0+ (formerly .NET Core) due to System.Text.Json instead of System.Web.Script.Serialization.JsonSerializer
+ * This library requires .NET 4.7.2+ due to System.Text.Json instead of System.Web.Script.Serialization.JsonSerializer
  *
  * To use this project, add the project to your existing solution (Add->existing project->stashapi.shproj), then add a reference to the shared
  * project from your existing code/application project (Add->shared project reference->Shared Projects)
@@ -9,6 +9,7 @@
  * -- STASHAPI shared project
  * 
  * Important Note - you must add the following references to you code/application project
+ * You must also add the Newtonsoft.JSON nuget package (handles all serialize operations; will eventually handle all serialize/deserialize operations)
  */
 using System;                           // Reference: System
 using System.Text;                      // Reference: System
@@ -24,12 +25,13 @@ using System.Threading.Tasks;           // Reference: System
 using System.IO;                        // Reference: System
 using System.Net.Http;                  // Reference: System.Net.Http
 using System.Linq;                      // Reference: System
+using System.Diagnostics;
 
 namespace Stash
 {
     public class StashAPI : Object
     {
-        public const string FILE_VERSION = "1.0.6";
+        public const string FILE_VERSION = "1.0.7";
         public const string STASHAPI_VERSION = "1.0";       // API Version
         public const int STASHAPI_ID_LENGTH = 32;        // api_id String length
         public const int STASHAPI_PW_LENGTH = 32;        // API_PW String length (minimum)
@@ -134,7 +136,14 @@ namespace Stash
         public string apiOperation = "";
         public List<string> NoIdOperations = new List<string>{"getapicreds", "getsecret"};  // These requests don't need an API_ID
 
-        // STASHAPI.CS Constructor
+        /// <summary>
+        /// STASHAPI.CS Constructor
+        /// NOTE - this object does NOT appear to be thread safe for file uploads - create a new object for uploading each time
+        /// </summary>
+        /// <param name="apiId"></param>
+        /// <param name="apiPw"></param>
+        /// <param name="urlIn"></param>
+        /// <param name="verbosity"></param>
         public StashAPI(string apiId = "", string apiPw = "", string urlIn = "", bool verbosity = false)
         {
             this.api_version = STASHAPI_VERSION;
@@ -191,13 +200,17 @@ namespace Stash
             if (!dataIn.TryGetValue("api_timestamp", out object apiTimestamp) || apiTimestamp == null || apiTimestamp.ToString() == "") { throw new System.Exception("Input array missing api_timestamp for signature calculation"); }
             if (dataIn.ContainsKey("api_signature")) { dataIn.Remove("api_signature"); }
 
-            strToSign = JsonSerializer.Serialize(dataIn);
+            // Any unicode characters in dataIn when it's encoded by json_encode will get lowercase codes e.g. \u00d
+            // but in JsonSerializer, it will get uppercase codes, e.g. \u00D
+            // See https://stackoverflow.com/questions/69675115/httpclient-and-system-text-json-jsonserializer-and-php-different-character-size?noredirect=1#comment123168070_69675115
+            // The Newtonsoft.Json library is used to create an exact-case match with PHP's json_encode function
+            strToSign = Newtonsoft.Json.JsonConvert.SerializeObject(dataIn);
 
             sig = Hash_hmac("sha256", strToSign, this.api_pw);
 
             // Convert to lowercase to match PHP's hash_hmac function which outputs lowercase hexbits
             this.api_signature = sig.ToLower();
-            if (this.verbosity) { Console.WriteLine(" - setSignature - strToSign: " + strToSign + " sig: " + sig); }
+            if (this.verbosity) { Console.WriteLine(" - setSignature - strToSign: " + strToSign + " sig: " + this.api_signature); }
             return true;
         }
 
@@ -655,8 +668,9 @@ namespace Stash
             apiParams.Add("api_signature", this.getSignature());
 
             // Build payload
-            payload = JsonSerializer.Serialize(apiParams);       // apiParams is already merged if need be in signature above
-                                                                 //byte[] payloadBytes = Encoding.UTF8.GetBytes(payload);
+            //payload = JsonSerializer.Serialize(apiParams);       // apiParams is already merged if need be in signature above
+            //byte[] payloadBytes = Encoding.UTF8.GetBytes(payload);
+            payload = Newtonsoft.Json.JsonConvert.SerializeObject(apiParams);
 
             //objHWR.Method = WebRequestMethods.Http.Post;
             //objHWR.ContentType = "application/json";
@@ -727,8 +741,9 @@ namespace Stash
                 apiParams.Add("api_signature", this.getSignature());
 
                 // Build payload
-                payload = JsonSerializer.Serialize(apiParams);       // apiParams is already merged if need be in signature above
-                                                                     //byte[] payloadBytes = Encoding.UTF8.GetBytes(payload);
+                payload = Newtonsoft.Json.JsonConvert.SerializeObject(apiParams);       // apiParams is already merged if need be in signature above
+                //payload = JsonSerializer.Serialize(apiParams);       // apiParams is already merged if need be in signature above
+                //byte[] payloadBytes = Encoding.UTF8.GetBytes(payload);
                 
                 var t = Task.Run(() => PostURIasStream(this.url, payload, timeOut, cts.Token));
                 t.Wait();
@@ -845,7 +860,8 @@ namespace Stash
             if (this.verbosity) { Console.WriteLine(" - sendFileRequest - "); }
             if (this.url == "") { throw new ArgumentException("Invalid URL"); }
             if (fileNameIn == "" || !System.IO.File.Exists(fileNameIn)) { throw new ArgumentException("A Filename Must Be Specified, or File Does Not Exist"); }
-                        
+            string guidFile = "STASHFILE_" + System.Guid.NewGuid().ToString();
+
             FileStream fileStream = null;
             try
             {
@@ -910,6 +926,7 @@ namespace Stash
                 apiParams.Add("api_id", this.api_id);
                 this.api_timestamp = 0;        // Set to current timestamp
                 apiParams.Add("api_timestamp", this.api_timestamp);
+                apiParams.Add("file_guid", guidFile);
                 // Sign Request
                 if ((this.dParams != null) && this.dParams.Count > 0)
                 {
@@ -965,9 +982,11 @@ namespace Stash
                         this.setSignature(apiParams);
                         apiParams.Add("api_signature", this.getSignature());
 
-                        var apiParameters = JsonSerializer.Serialize(apiParams);
-                        var chunkedParameters = JsonSerializer.Serialize(chunkedParams);
-                        ASCIIEncoding ascii = new ASCIIEncoding();
+                        //var apiParameters = JsonSerializer.Serialize(apiParams);
+                        //var chunkedParameters = JsonSerializer.Serialize(chunkedParams);
+                        var apiParameters = Newtonsoft.Json.JsonConvert.SerializeObject(apiParams);
+                        var chunkedParameters = Newtonsoft.Json.JsonConvert.SerializeObject(chunkedParams);
+                        //ASCIIEncoding ascii = new ASCIIEncoding();
 
                         ByteArrayContent data = null;
                         if (fileDone)
@@ -982,15 +1001,20 @@ namespace Stash
                         }
                         data.Headers.ContentType = System.Net.Http.Headers.MediaTypeHeaderValue.Parse("multipart/form-data");
 
-                        byte[] strParamsBytes = ascii.GetBytes(apiParameters);
-                        byte[] chunkedParamBytes = ascii.GetBytes(chunkedParameters);
+                        //byte[] strParamsBytes = ascii.GetBytes(apiParameters);
+                        //byte[] chunkedParamBytes = ascii.GetBytes(chunkedParameters);
+                        byte[] bytesParams = Encoding.UTF8.GetBytes(apiParameters);
+                        byte[] bytesChunkedParam = Encoding.UTF8.GetBytes(chunkedParameters);
+
                         HttpClient requestToServer = new HttpClient();
                         requestToServer.Timeout = new TimeSpan(0, 0, timeOutSeconds);
                         MultipartFormDataContent form = new MultipartFormDataContent();
                         form.Add(data, "file", fileNameIn.Substring(pos, fileNameIn.Length - pos));
                         
-                        form.Add(new ByteArrayContent(strParamsBytes), "params");
-                        form.Add(new ByteArrayContent(chunkedParamBytes), "chunkedParams");
+                        //form.Add(new ByteArrayContent(strParamsBytes), "params");
+                        //form.Add(new ByteArrayContent(chunkedParamBytes), "chunkedParams");
+                        form.Add(new ByteArrayContent(bytesParams), "params");
+                        form.Add(new ByteArrayContent(bytesChunkedParam), "chunkedParams");
 
                         HttpResponseMessage response = await requestToServer.PostAsync(url, form);
                         if (!response.IsSuccessStatusCode) { throw new Exception(response.ReasonPhrase); }
@@ -1021,7 +1045,7 @@ namespace Stash
             }
             catch (OperationCanceledException)
             {
-                retVal = JsonSerializer.Serialize(new Dictionary<string, object>()
+                retVal = Newtonsoft.Json.JsonConvert.SerializeObject(new Dictionary<string, object>()
                 {
                     { "code", 499 },
                     { "error", new Dictionary<string, object>()
@@ -1854,6 +1878,11 @@ namespace Stash
             retCode = 0;
             Dictionary<string, object> retVal = new Dictionary<string, object>();
 
+            if (fileNameOut == null || fileNameOut == "")
+            {
+                throw new ArgumentException("An Output File Name Must be Specified");
+            }
+
             // Check fileNameOut contains a valid path
             System.IO.FileInfo fInfo = new System.IO.FileInfo(fileNameOut);
             if (!fInfo.Directory.Exists)
@@ -1875,7 +1904,8 @@ namespace Stash
                 retVal.Add("code", "200");
                 retVal.Add("message", "OK");
                 retVal.Add("fileName", fileNameOut);
-                apiResult = JsonSerializer.Serialize(retVal);
+                //apiResult = JsonSerializer.Serialize(retVal);
+                apiResult = Newtonsoft.Json.JsonConvert.SerializeObject(retVal);
             }
 
             return apiResult;
@@ -1965,11 +1995,12 @@ namespace Stash
             {
                 // Generate a temp name for the server to store the file. This prevents files of the same name from confilicting with each other.
                 // This becomes the token for resuming uploads
-                const string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-                Random random = new Random();
-                resumeToken = new string(Enumerable.Repeat(chars, 24)
-                  .Select(s => s[random.Next(s.Length)]).ToArray());
-                resumeToken += fInfo.Extension;        // Add file extension
+                //const string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+                //Random random = new Random();
+                //resumeToken = new string(Enumerable.Repeat(chars, 24)
+                //  .Select(s => s[random.Next(s.Length)]).ToArray());
+                //resumeToken += fInfo.Extension;        // Add file extension
+                resumeToken = System.Guid.NewGuid().ToString().Replace("-", String.Empty);
             }
 
             this.dParams = srcIdentifier;
@@ -3137,10 +3168,17 @@ namespace Stash
 
         // Function reads (gets) a specific version of a file
         // Returns the JSON encoded response string to make it easier to parse by API caller
-        public string readVersion(Dictionary<string, object> srcIdentifier, string fileNameOut, int timeOut, out int retCode)
+        public string readVersion(Dictionary<string, object> srcIdentifier, string fileNameOut, ulong fileSize, int timeOut, Action<ulong, ulong, string> callback, CancellationTokenSource cts, out int retCode)
         {
             string apiResult = "";
             retCode = 0;
+
+            //this.getFile();
+
+            if (fileNameOut == null || fileNameOut == "")
+            {
+                throw new ArgumentException("An Output File Name Must be Specified");
+            }
 
             // Check fileNameOut contains a valid path
             System.IO.FileInfo fInfo = new System.IO.FileInfo(fileNameOut);
@@ -3154,7 +3192,7 @@ namespace Stash
 
             if (!this.validateParams("readversion")) { throw new ArgumentException("Invalid Input Parameters"); }
 
-            apiResult = this.sendDownloadRequest(fileNameOut, 0, timeOut, null, null, out retCode);
+            apiResult = this.sendDownloadRequest(fileNameOut, fileSize, timeOut, callback, cts, out retCode);
             if (this.dParams != null) { this.dParams.Clear(); }
 
             if (apiResult == "1")
@@ -3164,8 +3202,8 @@ namespace Stash
                 retVal.Add("code", 200);
                 retVal.Add("message", "OK");
                 retVal.Add("fileName", fileNameOut);
-
-                apiResult = JsonSerializer.Serialize(retVal);
+                //apiResult = JsonSerializer.Serialize(retVal);
+                apiResult = Newtonsoft.Json.JsonConvert.SerializeObject(retVal);
             }
             return apiResult;
         }
