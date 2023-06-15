@@ -2003,6 +2003,12 @@ namespace Stash
                 resumeToken = System.Guid.NewGuid().ToString().Replace("-", String.Empty);
             }
 
+            // If the destFileName isn't present - add it - this will prevent the backend from using the $_FILES array for the filename which may have different formats for unicode strings
+            if (!srcIdentifier.TryGetValue("destFileName", out object tDestFileName))
+            {
+                srcIdentifier.Add("destFileName", System.IO.Path.GetFileName(fileNameIn));
+            }
+
             this.dParams = srcIdentifier;
             this.url = this.BASE_API_URL + "api2/file/writechunked";
             if (!this.validateParams("write")) { throw new ArgumentException("Invalid Input Parameters"); }
