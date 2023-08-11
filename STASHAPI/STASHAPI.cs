@@ -31,7 +31,7 @@ namespace Stash
 {
     public class StashAPI : Object
     {
-        public const string FILE_VERSION = "1.0.7";
+        public const string FILE_VERSION = "1.0.8";
         public const string STASHAPI_VERSION = "1.0";       // API Version
         public const int STASHAPI_ID_LENGTH = 32;        // api_id String length
         public const int STASHAPI_PW_LENGTH = 32;        // API_PW String length (minimum)
@@ -1073,6 +1073,160 @@ namespace Stash
             return retVal;
         }
 
+        public async Task<string> SendFileRequestStream(string fileNameIn, int chunkSize, int timeOutSeconds, Action<ulong, ulong, string> callback, System.Threading.CancellationTokenSource cts, string resumeToken, bool resumeUpload)
+        {
+            string retVal = "";
+
+            if (this.verbosity) { Console.WriteLine(" - sendFileRequest - "); }
+            if (this.url == "") { throw new ArgumentException("Invalid URL"); }
+            if (fileNameIn == "" || !System.IO.File.Exists(fileNameIn)) { throw new ArgumentException("A Filename Must Be Specified, or File Does Not Exist"); }
+            string guidFile = "STASHFILE_" + System.Guid.NewGuid().ToString();
+
+            FileStream fileStream = null;
+            try
+            {
+                int i = 1;
+                string sha256Hash = FileSha256Hash(fileNameIn);
+
+                fileStream = new FileStream(fileNameIn, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: chunkSize, useAsync: true);
+                bool fileDone = false;          // Flag to track if file is being resumed from the point its been completely uploaded already (e.g. there was an error with encrypt, slice or sending to storage)
+
+                // If resumeUpload flag set, resumeToken set, and able to seek on the FileStream - try a resume
+                if (resumeUpload && resumeToken != "" && fileStream.CanSeek)
+                {
+                    // Copy the dParams dictionary so it can be reused after GetResumeIndex clears this.dParams
+                    //Dictionary<string, object> tDict = this.convertDestinationToSourceDictionary(this.dParams, true);
+                    Dictionary<string, object> tDict = this.CopyDictionary(this.dParams);
+
+                    // Get length of file with resumeToken name on server - this will be the position to start from
+                    string apiResponseString = this.GetResumeIndex(new Dictionary<string, object>()
+                    {
+                        { "resumetoken", resumeToken}
+                    }, out int retCode, out ulong resumeIndex);
+
+                    if (resumeIndex > 0)
+                    {
+                        try
+                        {
+                            fileStream.Seek(Convert.ToInt64(resumeIndex), SeekOrigin.Begin);
+                            i = (int)(resumeIndex / Convert.ToUInt64(chunkSize)) + 1;
+                            if (Convert.ToUInt64(fileStream.Length) == resumeIndex) { fileDone = true; }
+                        }
+                        catch (Exception)
+                        {
+                            // Something failed with seek - reset it to 0 and start upload over again
+                            fileStream.Seek(0, SeekOrigin.Begin);
+                            resumeIndex = 0;
+                            resumeUpload = false;
+                        }
+                    }
+                    this.dParams = tDict;
+                }
+
+                // Do not need to set URL because this is a base call, Support File writes, File Writes, Chunked File and Stream Writes will all set the URL before calling this function
+
+                // Build params list containing needed API fields
+                System.IO.FileInfo uploadFile = new System.IO.FileInfo(fileNameIn);
+                //Dictionary<string, string> chunkedParams = new Dictionary<string, string>();
+
+                //chunkedParams.Add("temp_name", resumeToken);
+
+                if (uploadFile.Length <= chunkSize)
+                {
+                    chunkSize = Convert.ToInt32(uploadFile.Length);  // if the file is smaller than the chunk size, upload the file as one chunk
+                }
+
+                //byte[] buffer = new byte[chunkSize];
+
+                //Int32 bytesRead = 0;
+                //var responseString = string.Empty;
+
+                Dictionary<string, object> apiParams = new Dictionary<string, object>();
+                apiParams.Add("url", this.url);
+                apiParams.Add("api_version", this.api_version);
+                apiParams.Add("api_id", this.api_id);
+                this.api_timestamp = 0;        // Set to current timestamp
+                apiParams.Add("api_timestamp", this.api_timestamp);
+                apiParams.Add("file_guid", guidFile);
+                // Sign Request
+                Dictionary<string, object> mergedDictionaries = Dictionaries_merge(apiParams, this.dParams);
+                if ((this.dParams != null) && this.dParams.Count > 0)
+                {
+                    this.setSignature(mergedDictionaries);
+                }
+                else
+                {
+                    this.setSignature(apiParams);
+                }
+                apiParams.Add("api_signature", this.getSignature());
+
+                StreamContent streamData = new StreamContent(fileStream, chunkSize);
+                
+                streamData.Headers.Add("x-stash-api-id", this.api_id);
+                streamData.Headers.Add("x-stash-api-signature", this.getSignature());
+                streamData.Headers.Add("x-stash-api-timestamp", this.api_timestamp.ToString());
+                streamData.Headers.Add("x-stash-api-version", this.api_version);
+                streamData.Headers.Add("x-stash-api-params", Newtonsoft.Json.JsonConvert.SerializeObject(mergedDictionaries));
+                streamData.Headers.Add("x-stash-size", uploadFile.Length.ToString());
+                streamData.Headers.Add("x-stash-filename", uploadFile.Name);
+                streamData.Headers.Add("x-stash-sha256hash", sha256Hash);
+                // ToDo fix...
+                //streamData.Headers.Add("content-type", "");
+
+                HttpClient requestToServer = new HttpClient();
+                requestToServer.Timeout = new TimeSpan(0, 0, timeOutSeconds);
+
+                HttpResponseMessage response = await requestToServer.PostAsync(url, streamData);
+                if (!response.IsSuccessStatusCode) { throw new Exception(response.ReasonPhrase); }
+                // If code:200 not in response value, then throw exception with content
+                retVal = response.Content.ReadAsStringAsync().Result;
+                if (!retVal.Contains("\"code\":200")) { throw new Exception(retVal); }
+
+                if (retVal.Contains("sha256hash"))
+                {
+                    // Check hash values from local file and reported by server and error if they are different
+                    // Format being looked for "sha256hash":"abcd..."
+                    string keyString = "\"sha256hash\":";
+                    int keyStrStart = retVal.IndexOf(keyString);
+                    int hashStrStart = keyStrStart + keyString.Length + 1; // +1 for the : and " after the sha256hash and before the start of the actual hash
+                    int hashStrEnd = retVal.IndexOf("\"", hashStrStart);
+                    string strHash = retVal.Substring(hashStrStart, hashStrEnd - hashStrStart);
+                
+                    if (strHash != sha256Hash) { 
+                        throw new Exception("File Hashes do not Match - Source and Received File on Server are Different. Delete the File on the Server, Restore Previous Version on the Server, or Try Your Upload Again."); 
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                retVal = Newtonsoft.Json.JsonConvert.SerializeObject(new Dictionary<string, object>()
+                {
+                    { "code", 499 },
+                    { "error", new Dictionary<string, object>()
+                        {
+                            { "errorCode", 499 },
+                            { "extendedErrorMessage", "Client Cancelled Upload" },
+                        }
+                    },
+                    { "message", "The upload request was cancelled by the client" },
+                });
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine("ERROR - There was an error: " + e.Message);
+                retVal = e.Message;
+            }
+            finally
+            {
+                if (fileStream != null)
+                {
+                    fileStream.Dispose();
+                }
+            }
+
+            return retVal;
+        }
+
         // Validate the source identifier parameters
         // * Source identifier can contain fileId, fileName, folderNames, folderId
         // * To be valid, a fileId Or (fileName And (folderId Or folderNames)) must be given
@@ -2043,6 +2197,106 @@ namespace Stash
                 if (this.verbosity)
                 {
                     Console.WriteLine("- Error Occurred putFileChunked, Code: " + retCode.ToString() + " Message: " + (msg != null ? msg.ToString() : "Not Available") + " Extended Message: " + (extMsg != null ? extMsg.ToString() : "Not Available"));
+                }
+            }
+            return retVal;
+        }
+
+        /// <summary>
+        /// Uploads a file to the user's Vault using a stream
+        /// The advantange of this method is that the file is not written to the Vault server hard drives until it is encrypted
+        /// </summary>
+        /// <param name="fileNameIn">the name and path of the file to upload</param>
+        /// <param name="srcIdentifier">the Source identifier containing where the file should be uploaded in the Vault</param>
+        /// <param name="chunkSize">the size, in bytes, of the stream chunks to process at a time</param>
+        /// <param name="timeOut">the number of seconds to wait for the function to timeout</param>
+        /// <param name="callback">a function called every 'chunkSize' bytes transferred to report status</param>
+        /// <param name="cts">a cancellation token for cancelling the request</param>
+        /// <param name="resumeToken">Output, a token to resume the file if the upload was interrupted</param>
+        /// <param name="retCode">Output, the result code (e.g. 200, 400, etc)</param>
+        /// <param name="fileId">Output, the Vault File ID</param>
+        /// <param name="fileAliasId">Output, the Vault File Alias ID</param>
+        /// <returns>Dictionary<string, object> of values</returns>
+        /// <exception cref="Exception"></exception>
+        /// <exception cref="ArgumentException"></exception>
+        public Dictionary<string, object> putFileStream(string fileNameIn, Dictionary<string, object> srcIdentifier, int chunkSize, int timeOut, Action<ulong, ulong, string> callback, System.Threading.CancellationTokenSource cts, out string resumeToken, out int retCode, out UInt64 fileId, out UInt64 fileAliasId)
+        {
+            string apiResult = "";
+
+            retCode = 0;
+            fileId = 0; fileAliasId = 0;
+            Dictionary<string, object> retVal = null;
+
+            System.IO.FileInfo fInfo = new System.IO.FileInfo(fileNameIn);
+            if (!fInfo.Exists)
+            {
+                throw new Exception("Incorrect Input File Path or File Does Not Exist");
+            }
+
+            bool resumeUpload = false;
+            if (srcIdentifier.TryGetValue("resumetoken", out object objResumeToken))
+            {
+                // The resumetoken was provided in the request parameters, use it to resume the upload
+                resumeToken = "";
+                if (objResumeToken != null)
+                {
+                    resumeToken = objResumeToken.ToString();
+                }
+                resumeUpload = true;
+            }
+            else
+            {
+                // Generate a temp name for the server to store the file. This prevents files of the same name from confilicting with each other.
+                // This becomes the token for resuming uploads
+                //const string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+                //Random random = new Random();
+                //resumeToken = new string(Enumerable.Repeat(chars, 24)
+                //  .Select(s => s[random.Next(s.Length)]).ToArray());
+                //resumeToken += fInfo.Extension;        // Add file extension
+                resumeToken = System.Guid.NewGuid().ToString().Replace("-", String.Empty);
+            }
+
+            // If the destFileName isn't present - add it - this will prevent the backend from using the $_FILES array for the filename which may have different formats for unicode strings
+            if (!srcIdentifier.TryGetValue("destFileName", out object tDestFileName))
+            {
+                srcIdentifier.Add("destFileName", System.IO.Path.GetFileName(fileNameIn));
+            }
+
+            this.dParams = srcIdentifier;
+            this.url = this.BASE_API_URL + "api2/file/writestream";
+            if (!this.validateParams("write")) { throw new ArgumentException("Invalid Input Parameters"); }
+
+            apiResult = this.SendFileRequestStream(fileNameIn, chunkSize, timeOut, callback, cts, resumeToken, resumeUpload).Result;
+            if (this.dParams != null) { this.dParams.Clear(); }
+
+            retCode = GetResponseCodeDict(apiResult, out retVal);
+
+            if (retCode == 200)
+            {
+                object fileAliasIdObj;
+                object fileIdObj;
+                retVal.TryGetValue("fileAliasId", out fileAliasIdObj);
+                retVal.TryGetValue("fileId", out fileIdObj);
+                if (fileAliasIdObj != null)
+                {
+                    fileAliasId = Convert.ToUInt64(fileAliasIdObj.ToString());
+                }
+                if (fileIdObj != null)
+                {
+                    fileId = Convert.ToUInt64(fileIdObj.ToString());
+                }
+            }
+            else if (retCode == -1)
+            {
+                // Custom error message is in apiResult
+                throw new Exception(apiResult);
+            }
+            else
+            {
+                GetError(retVal, out retCode, out string msg, out string extMsg);
+                if (this.verbosity)
+                {
+                    Console.WriteLine("- Error Occurred putFileStream, Code: " + retCode.ToString() + " Message: " + (msg != null ? msg.ToString() : "Not Available") + " Extended Message: " + (extMsg != null ? extMsg.ToString() : "Not Available"));
                 }
             }
             return retVal;
